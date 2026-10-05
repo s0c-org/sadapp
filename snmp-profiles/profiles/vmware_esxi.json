@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "profile_name": "vmware-esxi",
+  "display_name": "Vmware Esxi",
+  "description": "VMware ESXi Hypervisor Resource Monitoring",
+  "vendor": "VMware",
+  "device_classes": [
+    "hypervisor"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.6876"
+    ],
+    "sys_descr_regexes": [
+      "(?i)VMware"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "esxi_version": {
+      "oid": "1.3.6.1.4.1.6876.1.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "esxi_version",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esxi_build_number": {
+      "oid": "1.3.6.1.4.1.6876.1.2.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "esxi_build_number",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "configured_vms_count": {
+      "oid": "1.3.6.1.4.1.6876.2.1.1.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "configured_vms_count",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "active_vms_count": {
+      "oid": "1.3.6.1.4.1.6876.2.1.2.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "active_vms_count",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "virtual_machines": {
+      "base_oid": "1.3.6.1.4.1.6876.2.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "vm_index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "virtual_machines.vm_index"
+        },
+        "vm_display_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "virtual_machines.vm_display_name"
+        },
+        "vm_guest_os": {
+          "oid_suffix": "4",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "virtual_machines.vm_guest_os"
+        },
+        "vm_state": {
+          "oid_suffix": "5",
+          "type": "enum",
+          "unit": "status",
+          "scale": 1,
+          "transform": null,
+          "metric": "virtual_machines.vm_state"
+        },
+        "vm_memory_allocated_mb": {
+          "oid_suffix": "7",
+          "type": "gauge",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "virtual_machines.vm_memory_allocated_mb"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

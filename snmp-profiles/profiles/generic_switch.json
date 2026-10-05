@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "profile_name": "generic-switch",
+  "display_name": "Generic Switch",
+  "description": "Standard IETF MIB for Network Interfaces (IF-MIB)",
+  "vendor": "IETF",
+  "device_classes": [
+    "switch"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [],
+    "sys_descr_regexes": [],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 10,
+    "minimum_confidence": 0.5
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "interfaces_count": {
+      "oid": "1.3.6.1.2.1.2.1.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "interfaces_count",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "switch_ports": {
+      "base_oid": "1.3.6.1.2.1.2.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "port_index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.port_index"
+        },
+        "port_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.port_name"
+        },
+        "port_type": {
+          "oid_suffix": "3",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.port_type"
+        },
+        "max_speed_bps": {
+          "oid_suffix": "5",
+          "type": "gauge",
+          "unit": "bits_per_second",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.max_speed_bps"
+        },
+        "mac_address": {
+          "oid_suffix": "6",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.mac_address"
+        },
+        "admin_status": {
+          "oid_suffix": "7",
+          "type": "enum",
+          "unit": "status",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.admin_status"
+        },
+        "operational_status": {
+          "oid_suffix": "8",
+          "type": "enum",
+          "unit": "status",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.operational_status"
+        },
+        "bytes_received_32bit": {
+          "oid_suffix": "10",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.bytes_received_32bit"
+        },
+        "packets_received_errors": {
+          "oid_suffix": "14",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.packets_received_errors"
+        },
+        "bytes_sent_32bit": {
+          "oid_suffix": "16",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.bytes_sent_32bit"
+        },
+        "packets_sent_errors": {
+          "oid_suffix": "20",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports.packets_sent_errors"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    },
+    "switch_ports_high_speed": {
+      "base_oid": "1.3.6.1.2.1.31.1.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "bytes_received_64bit": {
+          "oid_suffix": "6",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports_high_speed.bytes_received_64bit"
+        },
+        "bytes_sent_64bit": {
+          "oid_suffix": "10",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "switch_ports_high_speed.bytes_sent_64bit"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": [
+    { "oid": "1.3.6.1.6.3.1.1.5.1", "prefix": false, "event_key": "cold-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.2", "prefix": false, "event_key": "warm-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.3", "prefix": false, "event_key": "link-down", "severity": "critical", "resolves": null, "varbinds": { "1.3.6.1.2.1.2.2.1.1": "interface_index" }, "refresh_group": "interfaces", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.4", "prefix": false, "event_key": "link-up", "severity": "recovery", "resolves": "link-down", "varbinds": { "1.3.6.1.2.1.2.2.1.1": "interface_index" }, "refresh_group": "interfaces", "exclusive": false }
+  ]
+}

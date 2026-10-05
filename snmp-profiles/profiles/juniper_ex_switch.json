@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "profile_name": "juniper-ex",
+  "display_name": "Juniper Ex",
+  "description": "Juniper Networks EX Switch System Chassis Telemetry",
+  "vendor": "Juniper",
+  "device_classes": [
+    "appliance"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.2636"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Juniper"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "chassis_temperature_celsius": {
+      "oid": "1.3.6.1.4.1.2636.3.1.13.1.7.1.1.0",
+      "type": "integer",
+      "unit": "celsius",
+      "scale": 1,
+      "transform": null,
+      "metric": "chassis_temperature_celsius",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_utilisation_pct": {
+      "oid": "1.3.6.1.4.1.2636.3.1.13.1.8.1.1.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_utilisation_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "memory_utilisation_pct": {
+      "oid": "1.3.6.1.4.1.2636.3.1.13.1.9.1.1.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "memory_utilisation_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

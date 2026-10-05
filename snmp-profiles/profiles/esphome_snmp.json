@@ -1,0 +1,359 @@
+{
+  "schema_version": 1,
+  "profile_name": "esphome-snmp",
+  "display_name": "Esphome Snmp",
+  "description": "ESPHome SNMP Component by Aquaticus",
+  "vendor": "ESPHome",
+  "device_classes": [
+    "server"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [],
+    "sys_descr_regexes": [
+      "(?i)ESPHome"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.6
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "sys_descr": {
+      "oid": "1.3.6.1.2.1.1.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_descr",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_object_id": {
+      "oid": "1.3.6.1.2.1.1.2.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_object_id",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_uptime": {
+      "oid": "1.3.6.1.2.1.1.3.0",
+      "type": "gauge",
+      "unit": "seconds",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_uptime",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_contact": {
+      "oid": "1.3.6.1.2.1.1.4.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_contact",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_name": {
+      "oid": "1.3.6.1.2.1.1.5.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_name",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_location": {
+      "oid": "1.3.6.1.2.1.1.6.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_location",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sys_services": {
+      "oid": "1.3.6.1.2.1.1.7.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sys_services",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "hr_system_uptime": {
+      "oid": "1.3.6.1.2.1.25.1.1.0",
+      "type": "gauge",
+      "unit": "seconds",
+      "scale": 1,
+      "transform": null,
+      "metric": "hr_system_uptime",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "hr_memory_size": {
+      "oid": "1.3.6.1.2.1.25.2.2.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "hr_memory_size",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "wifi_rssi": {
+      "oid": "1.3.9999.4.1.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "wifi_rssi",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "wifi_bssid": {
+      "oid": "1.3.9999.4.2.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "wifi_bssid",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "wifi_ssid": {
+      "oid": "1.3.9999.4.3.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "wifi_ssid",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "wifi_ip": {
+      "oid": "1.3.9999.4.4.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "wifi_ip",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp32_heap_size": {
+      "oid": "1.3.9999.32.1.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp32_heap_size",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp32_free_heap": {
+      "oid": "1.3.9999.32.2.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp32_free_heap",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp32_min_free_heap": {
+      "oid": "1.3.9999.32.3.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp32_min_free_heap",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp32_max_allocated_heap": {
+      "oid": "1.3.9999.32.4.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp32_max_allocated_heap",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp8266_free_heap": {
+      "oid": "1.3.9999.8266.1.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp8266_free_heap",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp8266_heap_fragmentation": {
+      "oid": "1.3.9999.8266.2.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp8266_heap_fragmentation",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "esp8266_max_free_block": {
+      "oid": "1.3.9999.8266.3.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "esp8266_max_free_block",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "chip_type": {
+      "oid": "1.3.9999.2.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "chip_type",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_clock": {
+      "oid": "1.3.9999.2.2.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_clock",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "chip_model_or_core_version": {
+      "oid": "1.3.9999.2.3.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "chip_model_or_core_version",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_cores": {
+      "oid": "1.3.9999.2.4.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_cores",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "chip_revision": {
+      "oid": "1.3.9999.2.5.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "chip_revision",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "hr_storage": {
+      "base_oid": "1.3.6.1.2.1.25.2.3.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hr_storage.index"
+        },
+        "descr": {
+          "oid_suffix": "3",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "hr_storage.descr"
+        },
+        "allocation_unit": {
+          "oid_suffix": "4",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hr_storage.allocation_unit"
+        },
+        "size": {
+          "oid_suffix": "5",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hr_storage.size"
+        },
+        "used": {
+          "oid_suffix": "6",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hr_storage.used"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

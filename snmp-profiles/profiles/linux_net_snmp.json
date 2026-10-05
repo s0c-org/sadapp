@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "profile_name": "linux-net-snmp",
+  "display_name": "Linux Net Snmp",
+  "description": "Comprehensive Linux Host Core Performance Profile (UCD-SNMP-MIB)",
+  "vendor": "Net-SNMP",
+  "device_classes": [
+    "server"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.2021"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Net-SNMP"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 10,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "cpu_user": {
+      "oid": "1.3.6.1.4.1.2021.11.9.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_user",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_system": {
+      "oid": "1.3.6.1.4.1.2021.11.10.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_system",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_idle": {
+      "oid": "1.3.6.1.4.1.2021.11.11.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_idle",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "mem_total_swap_kb": {
+      "oid": "1.3.6.1.4.1.2021.4.3.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "mem_total_swap_kb",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "mem_avail_swap_kb": {
+      "oid": "1.3.6.1.4.1.2021.4.4.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "mem_avail_swap_kb",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "mem_total_real_kb": {
+      "oid": "1.3.6.1.4.1.2021.4.5.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "mem_total_real_kb",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "mem_avail_real_kb": {
+      "oid": "1.3.6.1.4.1.2021.4.6.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "mem_avail_real_kb",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "system_load": {
+      "base_oid": "1.3.6.1.4.1.2021.10.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "system_load.index"
+        },
+        "metric_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "system_load.metric_name"
+        },
+        "load_value_string": {
+          "oid_suffix": "3",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "system_load.load_value_string"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": [
+    { "oid": "1.3.6.1.6.3.1.1.5.1", "prefix": false, "event_key": "cold-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.2", "prefix": false, "event_key": "warm-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.3", "prefix": false, "event_key": "link-down", "severity": "critical", "resolves": null, "varbinds": { "1.3.6.1.2.1.2.2.1.1": "interface_index" }, "refresh_group": "interfaces", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.4", "prefix": false, "event_key": "link-up", "severity": "recovery", "resolves": "link-down", "varbinds": { "1.3.6.1.2.1.2.2.1.1": "interface_index" }, "refresh_group": "interfaces", "exclusive": false }
+  ]
+}

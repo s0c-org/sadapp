@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "profile_name": "asic-antminer",
+  "display_name": "Asic Antminer",
+  "description": "Bitcoin Mining Rig (ASIC Miner) Performance Statistics",
+  "vendor": "Bitmain",
+  "device_classes": [
+    "miner"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.54321"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Bitmain"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "total_hashrate_ghs": {
+      "oid": "1.3.6.1.4.1.54321.1.1.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_hashrate_ghs",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "uptime_total_seconds": {
+      "oid": "1.3.6.1.4.1.54321.1.2.0",
+      "type": "gauge",
+      "unit": "seconds",
+      "scale": 1,
+      "transform": null,
+      "metric": "uptime_total_seconds",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "pool_connection_status": {
+      "oid": "1.3.6.1.4.1.54321.1.3.0",
+      "type": "enum",
+      "unit": "status",
+      "scale": 1,
+      "transform": null,
+      "metric": "pool_connection_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "power_consumption_watts": {
+      "oid": "1.3.6.1.4.1.54321.1.4.0",
+      "type": "gauge",
+      "unit": "watts",
+      "scale": 1,
+      "transform": null,
+      "metric": "power_consumption_watts",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "hash_boards": {
+      "base_oid": "1.3.6.1.4.1.54321.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "board_index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hash_boards.board_index"
+        },
+        "board_hashrate": {
+          "oid_suffix": "2",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hash_boards.board_hashrate"
+        },
+        "chip_temperature": {
+          "oid_suffix": "3",
+          "type": "gauge",
+          "unit": "celsius",
+          "scale": 1,
+          "transform": null,
+          "metric": "hash_boards.chip_temperature"
+        },
+        "pcb_temperature": {
+          "oid_suffix": "4",
+          "type": "gauge",
+          "unit": "celsius",
+          "scale": 1,
+          "transform": null,
+          "metric": "hash_boards.pcb_temperature"
+        },
+        "hardware_errors": {
+          "oid_suffix": "5",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "hash_boards.hardware_errors"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

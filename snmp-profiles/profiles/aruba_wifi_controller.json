@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "profile_name": "aruba-wifi-controller",
+  "display_name": "Aruba Wifi Controller",
+  "description": "Aruba Mobility Controller Enterprise Wireless Infrastructure",
+  "vendor": "Aruba",
+  "device_classes": [
+    "wireless"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.14823"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Aruba"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "controller_model": {
+      "oid": "1.3.6.1.4.1.14823.2.2.1.1.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "controller_model",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "total_active_access_points": {
+      "oid": "1.3.6.1.4.1.14823.2.2.1.1.3.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_active_access_points",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "total_wifi_clients": {
+      "oid": "1.3.6.1.4.1.14823.2.2.1.1.3.2.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_wifi_clients",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "access_points_list": {
+      "base_oid": "1.3.6.1.4.1.14823.2.2.1.5.2.1.4.1",
+      "index_strategy": "integer",
+      "columns": {
+        "ap_index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "access_points_list.ap_index"
+        },
+        "ap_name": {
+          "oid_suffix": "3",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "access_points_list.ap_name"
+        },
+        "ap_ip_address": {
+          "oid_suffix": "4",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "access_points_list.ap_ip_address"
+        },
+        "ap_status": {
+          "oid_suffix": "19",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "access_points_list.ap_status"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

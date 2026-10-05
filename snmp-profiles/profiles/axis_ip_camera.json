@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "profile_name": "axis-camera",
+  "display_name": "Axis Camera",
+  "description": "Axis Network Telemetry and Video Surveillance Status (AXIS-MIB)",
+  "vendor": "Axis",
+  "device_classes": [
+    "camera"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.1722"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Axis"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "casing_open_triggered": {
+      "oid": "1.3.6.1.4.1.1722.1.1.2.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "casing_open_triggered",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sd_card_status": {
+      "oid": "1.3.6.1.4.1.1722.1.1.4.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sd_card_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "temperature_celsius": {
+      "oid": "1.3.6.1.4.1.1722.1.1.7.1.0",
+      "type": "integer",
+      "unit": "celsius",
+      "scale": 1,
+      "transform": null,
+      "metric": "temperature_celsius",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "video_streams": {
+      "base_oid": "1.3.6.1.4.1.1722.1.5.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "video_streams.index"
+        },
+        "resolution": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "video_streams.resolution"
+        },
+        "frame_rate": {
+          "oid_suffix": "3",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "video_streams.frame_rate"
+        },
+        "bitrate_kbps": {
+          "oid_suffix": "4",
+          "type": "integer",
+          "unit": "bits_per_second",
+          "scale": 1,
+          "transform": null,
+          "metric": "video_streams.bitrate_kbps"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "profile_name": "sophos-utm",
+  "display_name": "Sophos Utm",
+  "description": "Sophos UTM / XG Security Gateway Metrics (SOPHOS-CYBEROAM-MIB)",
+  "vendor": "Sophos",
+  "device_classes": [
+    "firewall"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.21067"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Sophos"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "live_connections": {
+      "oid": "1.3.6.1.4.1.21067.2.1.2.3.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "live_connections",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "http_hits": {
+      "oid": "1.3.6.1.4.1.21067.2.1.2.5.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "http_hits",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "mail_queue_size": {
+      "oid": "1.3.6.1.4.1.21067.2.1.3.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "mail_queue_size",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "vpn_active_tunnels": {
+      "oid": "1.3.6.1.4.1.21067.2.1.8.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "vpn_active_tunnels",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "profile_name": "solaredge-inverter",
+  "display_name": "Solaredge Inverter",
+  "description": "SolarEdge Photovoltaic Inverter (SunSpec Modbus-over-SNMP Map)",
+  "vendor": "SolarEdge",
+  "device_classes": [
+    "inverter"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.50555"
+    ],
+    "sys_descr_regexes": [
+      "(?i)SolarEdge"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "ac_current": {
+      "oid": "1.3.6.1.4.1.50555.1.1.1.0",
+      "type": "integer",
+      "unit": "amps",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "ac_current",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "ac_voltage_phase_a": {
+      "oid": "1.3.6.1.4.1.50555.1.1.2.0",
+      "type": "integer",
+      "unit": "volts",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "ac_voltage_phase_a",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "ac_power_watts": {
+      "oid": "1.3.6.1.4.1.50555.1.1.4.0",
+      "type": "integer",
+      "unit": "watts",
+      "scale": 1,
+      "transform": null,
+      "metric": "ac_power_watts",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "ac_frequency_hz": {
+      "oid": "1.3.6.1.4.1.50555.1.1.5.0",
+      "type": "integer",
+      "unit": "hertz",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "ac_frequency_hz",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "dc_current": {
+      "oid": "1.3.6.1.4.1.50555.1.1.7.0",
+      "type": "integer",
+      "unit": "amps",
+      "scale": 0.001,
+      "transform": null,
+      "metric": "dc_current",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "dc_voltage": {
+      "oid": "1.3.6.1.4.1.50555.1.1.8.0",
+      "type": "integer",
+      "unit": "volts",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "dc_voltage",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "inverter_temperature_celsius": {
+      "oid": "1.3.6.1.4.1.50555.1.1.10.0",
+      "type": "integer",
+      "unit": "celsius",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "inverter_temperature_celsius",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "total_energy_produced_kwh": {
+      "oid": "1.3.6.1.4.1.50555.1.1.11.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_energy_produced_kwh",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "operating_status": {
+      "oid": "1.3.6.1.4.1.50555.1.1.12.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "operating_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "profile_name": "siemens-plc",
+  "display_name": "Siemens Plc",
+  "description": "Siemens SIMATIC S7 PLC Network & Diagnostics Interface",
+  "vendor": "Siemens",
+  "device_classes": [
+    "industrial-controller"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.199"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Siemens"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "plc_cpu_state": {
+      "oid": "1.3.6.1.4.1.199.1.1.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "plc_cpu_state",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "memory_load_memory_bytes": {
+      "oid": "1.3.6.1.4.1.199.1.2.1.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "memory_load_memory_bytes",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "memory_work_memory_bytes": {
+      "oid": "1.3.6.1.4.1.199.1.2.2.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "memory_work_memory_bytes",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "diagnostic_buffer_last_error_id": {
+      "oid": "1.3.6.1.4.1.199.1.3.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "diagnostic_buffer_last_error_id",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

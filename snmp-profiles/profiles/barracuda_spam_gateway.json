@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "profile_name": "barracuda-esg",
+  "display_name": "Barracuda Esg",
+  "description": "Barracuda Email Security Gateway (BARRACUDA-SPAM-FIREWALL-MIB)",
+  "vendor": "Barracuda",
+  "device_classes": [
+    "appliance"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.20632"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Barracuda"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "total_emails_processed": {
+      "oid": "1.3.6.1.4.1.20632.2.2.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_emails_processed",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "emails_blocked_spam": {
+      "oid": "1.3.6.1.4.1.20632.2.3.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "emails_blocked_spam",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "emails_blocked_virus": {
+      "oid": "1.3.6.1.4.1.20632.2.4.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "emails_blocked_virus",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "current_queue_length": {
+      "oid": "1.3.6.1.4.1.20632.2.5.0",
+      "type": "integer",
+      "unit": "amps",
+      "scale": 1,
+      "transform": null,
+      "metric": "current_queue_length",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

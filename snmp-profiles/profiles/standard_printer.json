@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "profile_name": "standard-printer",
+  "display_name": "Standard Printer",
+  "description": "Standard Fleet Printer MIB (RFC 3805)",
+  "vendor": "IETF",
+  "device_classes": [
+    "printer"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [],
+    "sys_descr_regexes": [],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 10,
+    "minimum_confidence": 0.5
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "total_page_counter": {
+      "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "total_page_counter",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "marker_supplies": {
+      "base_oid": "1.3.6.1.2.1.43.11.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "marker_supplies.index"
+        },
+        "type": {
+          "oid_suffix": "2",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "marker_supplies.type"
+        },
+        "description": {
+          "oid_suffix": "6",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "marker_supplies.description"
+        },
+        "max_capacity": {
+          "oid_suffix": "8",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "marker_supplies.max_capacity"
+        },
+        "current_level": {
+          "oid_suffix": "9",
+          "type": "integer",
+          "unit": "amps",
+          "scale": 1,
+          "transform": null,
+          "metric": "marker_supplies.current_level"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": [
+    { "oid": "1.3.6.1.6.3.1.1.5.1", "prefix": false, "event_key": "cold-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.2", "prefix": false, "event_key": "warm-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false }
+  ]
+}

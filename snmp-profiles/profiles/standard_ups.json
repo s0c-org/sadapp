@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "profile_name": "standard-ups",
+  "display_name": "Standard Ups",
+  "description": "Standard UPS Monitoring Profile (RFC 1628)",
+  "vendor": "IETF",
+  "device_classes": [
+    "ups"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [],
+    "sys_descr_regexes": [],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 10,
+    "minimum_confidence": 0.5
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "battery_status": {
+      "oid": "1.3.6.1.2.1.33.1.2.1.0",
+      "type": "enum",
+      "unit": "status",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_seconds_on_battery": {
+      "oid": "1.3.6.1.2.1.33.1.2.2.0",
+      "type": "gauge",
+      "unit": "seconds",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_seconds_on_battery",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_estimated_minutes_remaining": {
+      "oid": "1.3.6.1.2.1.33.1.2.3.0",
+      "type": "gauge",
+      "unit": "seconds",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_estimated_minutes_remaining",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_estimated_charge_pct": {
+      "oid": "1.3.6.1.2.1.33.1.2.4.0",
+      "type": "gauge",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_estimated_charge_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_voltage": {
+      "oid": "1.3.6.1.2.1.33.1.2.5.0",
+      "type": "gauge",
+      "unit": "volts",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_voltage",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_current": {
+      "oid": "1.3.6.1.2.1.33.1.2.6.0",
+      "type": "gauge",
+      "unit": "amps",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_current",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "battery_temperature_celsius": {
+      "oid": "1.3.6.1.2.1.33.1.2.7.0",
+      "type": "gauge",
+      "unit": "celsius",
+      "scale": 1,
+      "transform": null,
+      "metric": "battery_temperature_celsius",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "input_line_bads": {
+      "oid": "1.3.6.1.2.1.33.1.3.1.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "input_line_bads",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "output_source": {
+      "oid": "1.3.6.1.2.1.33.1.4.1.0",
+      "type": "enum",
+      "unit": "status",
+      "scale": 1,
+      "transform": null,
+      "metric": "output_source",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "ups_output_phase_table": {
+      "base_oid": "1.3.6.1.2.1.33.1.4.4.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "ups_output_phase_table.index"
+        },
+        "voltage_output": {
+          "oid_suffix": "2",
+          "type": "gauge",
+          "unit": "volts",
+          "scale": 1,
+          "transform": null,
+          "metric": "ups_output_phase_table.voltage_output"
+        },
+        "current_output": {
+          "oid_suffix": "3",
+          "type": "gauge",
+          "unit": "amps",
+          "scale": 1,
+          "transform": null,
+          "metric": "ups_output_phase_table.current_output"
+        },
+        "power_watts": {
+          "oid_suffix": "4",
+          "type": "gauge",
+          "unit": "watts",
+          "scale": 1,
+          "transform": null,
+          "metric": "ups_output_phase_table.power_watts"
+        },
+        "load_pct": {
+          "oid_suffix": "5",
+          "type": "gauge",
+          "unit": "percent",
+          "scale": 1,
+          "transform": null,
+          "metric": "ups_output_phase_table.load_pct"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": [
+    { "oid": "1.3.6.1.6.3.1.1.5.1", "prefix": false, "event_key": "cold-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false },
+    { "oid": "1.3.6.1.6.3.1.1.5.2", "prefix": false, "event_key": "warm-start", "severity": "warning", "resolves": null, "varbinds": {}, "refresh_group": "identity", "exclusive": false }
+  ]
+}

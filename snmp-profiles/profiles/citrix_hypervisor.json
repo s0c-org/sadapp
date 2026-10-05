@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "profile_name": "citrix-hypervisor",
+  "display_name": "Citrix Hypervisor",
+  "description": "Citrix XenServer / Hypervisor Core Performance",
+  "vendor": "Citrix",
+  "device_classes": [
+    "hypervisor"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.38446"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Citrix"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "xen_version": {
+      "oid": "1.3.6.1.4.1.38446.1.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "xen_version",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "resident_vms_count": {
+      "oid": "1.3.6.1.4.1.38446.1.2.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "resident_vms_count",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "storage_repositories": {
+      "base_oid": "1.3.6.1.4.1.38446.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "storage_repositories.index"
+        },
+        "uuid": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "storage_repositories.uuid"
+        },
+        "total_space_bytes": {
+          "oid_suffix": "4",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "storage_repositories.total_space_bytes"
+        },
+        "allocated_space_bytes": {
+          "oid_suffix": "5",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "storage_repositories.allocated_space_bytes"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

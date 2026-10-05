@@ -1,0 +1,12 @@
+target/
+dist/
+*.deb
+*.rpm
+.env
+.env.*
+!*.env.example
+*.pem
+*.key
+.DS_Store
+.vscode/
+.idea/

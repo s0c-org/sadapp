@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "profile_name": "mikrotik-wireless",
+  "display_name": "Mikrotik Wireless",
+  "description": "MikroTik RouterOS Wireless PtP Link Status (MIKROTIK-MIB)",
+  "vendor": "MikroTik",
+  "device_classes": [
+    "wireless"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.14988"
+    ],
+    "sys_descr_regexes": [
+      "(?i)MikroTik"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {},
+  "tables": {
+    "wireless_links": {
+      "base_oid": "1.3.6.1.4.1.14988.1.1.1.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.index"
+        },
+        "mac_address": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.mac_address"
+        },
+        "tx_rate_bps": {
+          "oid_suffix": "3",
+          "type": "integer",
+          "unit": "bits_per_second",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.tx_rate_bps"
+        },
+        "rx_rate_bps": {
+          "oid_suffix": "4",
+          "type": "integer",
+          "unit": "bits_per_second",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.rx_rate_bps"
+        },
+        "signal_strength_dbm": {
+          "oid_suffix": "5",
+          "type": "integer",
+          "unit": "decibels",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.signal_strength_dbm"
+        },
+        "tx_ccq_pct": {
+          "oid_suffix": "6",
+          "type": "integer",
+          "unit": "percent",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.tx_ccq_pct"
+        },
+        "frequency_mhz": {
+          "oid_suffix": "7",
+          "type": "integer",
+          "unit": "hertz",
+          "scale": 1,
+          "transform": null,
+          "metric": "wireless_links.frequency_mhz"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

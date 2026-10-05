@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "profile_name": "brocade-san-switch",
+  "display_name": "Brocade San Switch",
+  "description": "Brocade Fibre Channel SAN Switch Fabric Performance (SW-MIB)",
+  "vendor": "Brocade",
+  "device_classes": [
+    "switch"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.1588"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Brocade"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "fabric_status": {
+      "oid": "1.3.6.1.4.1.1588.2.1.1.1.1.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "fabric_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "sensor_count": {
+      "oid": "1.3.6.1.4.1.1588.2.1.1.1.1.2.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "sensor_count",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "fc_ports": {
+      "base_oid": "1.3.6.1.4.1.1588.2.1.1.1.6.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.index"
+        },
+        "port_type": {
+          "oid_suffix": "3",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.port_type"
+        },
+        "port_state": {
+          "oid_suffix": "4",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.port_state"
+        },
+        "tx_words": {
+          "oid_suffix": "11",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.tx_words"
+        },
+        "rx_words": {
+          "oid_suffix": "12",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.rx_words"
+        },
+        "crc_errors": {
+          "oid_suffix": "13",
+          "type": "counter",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "fc_ports.crc_errors"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

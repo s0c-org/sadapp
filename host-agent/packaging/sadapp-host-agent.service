@@ -1,0 +1,15 @@
+[Unit]
+Description=SadApp host monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/sadapp-host-agent
+ExecStart=/usr/bin/sadapp-host-agent
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

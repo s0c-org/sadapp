@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [snmp-profile-engine, local-network-collector, host-agent]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+      - name: Test
+        run: cargo test --locked --manifest-path ${{ matrix.crate }}/Cargo.toml
+      - name: Audit dependencies
+        run: |
+          cargo install cargo-audit --locked --quiet
+          cargo audit --file ${{ matrix.crate }}/Cargo.lock
+
+  profiles-and-installers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Check SNMP profile catalog
+        run: node snmp-profiles/scripts/check-profiles.mjs snmp-profiles/profiles
+      - name: Test profile normalizer
+        run: node --test snmp-profiles/scripts/normalize-snmp-profiles.test.mjs
+      - name: Check installer syntax
+        run: for script in install/*.sh host-agent/scripts/*.sh local-network-collector/scripts/*.sh; do bash -n "$script"; done

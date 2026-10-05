@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "profile_name": "cisco-catalyst",
+  "display_name": "Cisco Catalyst",
+  "description": "Cisco Enterprise CPU and Memory Pool Management",
+  "vendor": "Cisco",
+  "device_classes": [
+    "appliance"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.9"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Cisco"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "cpu_5sec_load_pct": {
+      "oid": "1.3.6.1.4.1.9.2.1.56.0",
+      "type": "gauge",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_5sec_load_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_1min_load_pct": {
+      "oid": "1.3.6.1.4.1.9.2.1.57.0",
+      "type": "gauge",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_1min_load_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "cpu_5min_load_pct": {
+      "oid": "1.3.6.1.4.1.9.2.1.58.0",
+      "type": "gauge",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "cpu_5min_load_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "cisco_memory_pools": {
+      "base_oid": "1.3.6.1.4.1.9.9.48.1.1.1",
+      "index_strategy": "integer",
+      "columns": {
+        "pool_index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "cisco_memory_pools.pool_index"
+        },
+        "pool_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "cisco_memory_pools.pool_name"
+        },
+        "pool_used_bytes": {
+          "oid_suffix": "5",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "cisco_memory_pools.pool_used_bytes"
+        },
+        "pool_free_bytes": {
+          "oid_suffix": "6",
+          "type": "counter",
+          "unit": "bytes",
+          "scale": 1,
+          "transform": null,
+          "metric": "cisco_memory_pools.pool_free_bytes"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

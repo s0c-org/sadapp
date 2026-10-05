@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "profile_name": "dell-idrac",
+  "display_name": "Dell Idrac",
+  "description": "Dell iDRAC PowerEdge Server Management (DELL-RAC-MIB)",
+  "vendor": "Dell",
+  "device_classes": [
+    "server-controller"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.674"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Dell"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "global_system_status": {
+      "oid": "1.3.6.1.4.1.674.10892.5.2.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "global_system_status",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "chassis_service_tag": {
+      "oid": "1.3.6.1.4.1.674.10892.5.1.1.8.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "chassis_service_tag",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "rollup_status_cpu": {
+      "oid": "1.3.6.1.4.1.674.10892.5.2.2.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "rollup_status_cpu",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "rollup_status_memory": {
+      "oid": "1.3.6.1.4.1.674.10892.5.2.3.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1,
+      "transform": null,
+      "metric": "rollup_status_memory",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "rollup_status_storage": {
+      "oid": "1.3.6.1.4.1.674.10892.5.2.4.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "rollup_status_storage",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "power_supplies": {
+      "base_oid": "1.3.6.1.4.1.674.10892.5.4.600.12.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "power_supplies.index"
+        },
+        "fqdd_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "power_supplies.fqdd_name"
+        },
+        "status": {
+          "oid_suffix": "5",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "power_supplies.status"
+        },
+        "output_watts": {
+          "oid_suffix": "7",
+          "type": "integer",
+          "unit": "watts",
+          "scale": 1,
+          "transform": null,
+          "metric": "power_supplies.output_watts"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    },
+    "physical_disks": {
+      "base_oid": "1.3.6.1.4.1.674.10893.1.20.130.4.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "physical_disks.index"
+        },
+        "name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "physical_disks.name"
+        },
+        "status": {
+          "oid_suffix": "4",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "physical_disks.status"
+        },
+        "size_mb": {
+          "oid_suffix": "11",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "physical_disks.size_mb"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

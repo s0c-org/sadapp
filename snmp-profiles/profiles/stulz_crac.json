@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "profile_name": "stulz-crac",
+  "display_name": "Stulz Crac",
+  "description": "Stulz Precision Cooling Air Conditioning Unit",
+  "vendor": "STULZ",
+  "device_classes": [
+    "environmental-sensor"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.14444"
+    ],
+    "sys_descr_regexes": [
+      "(?i)STULZ"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "return_air_temp": {
+      "oid": "1.3.6.1.4.1.14444.1.1.1.0",
+      "type": "integer",
+      "unit": "celsius",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "return_air_temp",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "return_air_humidity": {
+      "oid": "1.3.6.1.4.1.14444.1.1.2.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "return_air_humidity",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "supply_air_temp": {
+      "oid": "1.3.6.1.4.1.14444.1.1.3.0",
+      "type": "integer",
+      "unit": "celsius",
+      "scale": 0.1,
+      "transform": null,
+      "metric": "supply_air_temp",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "compressor_1_runtime_hours": {
+      "oid": "1.3.6.1.4.1.14444.1.2.1.0",
+      "type": "counter",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "compressor_1_runtime_hours",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "fan_speed_pct": {
+      "oid": "1.3.6.1.4.1.14444.1.3.1.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "fan_speed_pct",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "global_alarm_triggered": {
+      "oid": "1.3.6.1.4.1.14444.1.4.1.0",
+      "type": "integer",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "global_alarm_triggered",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {},
+  "traps": []
+}

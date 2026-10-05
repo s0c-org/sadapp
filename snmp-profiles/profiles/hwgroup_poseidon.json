@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "profile_name": "hwgroup-poseidon",
+  "display_name": "Hwgroup Poseidon",
+  "description": "Environmental Server Room Sensors (Temperature, Humidity, Leakage)",
+  "vendor": "HW group",
+  "device_classes": [
+    "environmental-sensor"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.21796"
+    ],
+    "sys_descr_regexes": [
+      "(?i)HW group"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "device_name": {
+      "oid": "1.3.6.1.4.1.21796.4.1.1.1.0",
+      "type": "string",
+      "unit": "text",
+      "scale": 1,
+      "transform": null,
+      "metric": "device_name",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "binary_input_leak_sensor": {
+      "oid": "1.3.6.1.4.1.21796.4.1.2.1.1.3.1",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "binary_input_leak_sensor",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    },
+    "binary_input_smoke_detector": {
+      "oid": "1.3.6.1.4.1.21796.4.1.2.1.1.3.2",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "binary_input_smoke_detector",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "analog_sensors_table": {
+      "base_oid": "1.3.6.1.4.1.21796.4.1.3.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "analog_sensors_table.index"
+        },
+        "sensor_name": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "analog_sensors_table.sensor_name"
+        },
+        "sensor_value_scaled": {
+          "oid_suffix": "3",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "analog_sensors_table.sensor_value_scaled"
+        },
+        "sensor_unit": {
+          "oid_suffix": "4",
+          "type": "gauge",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "analog_sensors_table.sensor_unit"
+        },
+        "sensor_state": {
+          "oid_suffix": "5",
+          "type": "enum",
+          "unit": "status",
+          "scale": 1,
+          "transform": null,
+          "metric": "analog_sensors_table.sensor_state"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}

@@ -1,0 +1,42 @@
+name: sadapp-local-network-collector
+arch: __NFPM_ARCH__
+platform: linux
+version: __NFPM_VERSION__
+release: __NFPM_RELEASE__
+section: admin
+priority: optional
+maintainer: SadApp <support@sadapp.org>
+description: SadApp Local Network Collector runtime
+vendor: SadApp
+homepage: https://sadapp.org
+license: Apache-2.0
+overrides:
+  deb:
+    depends:
+      - snmp
+      - iputils-ping
+  rpm:
+    depends:
+      - net-snmp-utils
+      - iputils
+scripts:
+  postinstall: packaging/postinstall.sh
+contents:
+  - src: dist/.package-root/sadapp-local-network-collector
+    dst: /usr/bin/sadapp-local-network-collector
+    file_info:
+      mode: 0755
+  - src: packaging/sadapp-local-network-collector.service
+    dst: /usr/lib/systemd/system/sadapp-local-network-collector.service
+    file_info:
+      mode: 0644
+  - src: packaging/sadapp-local-network-collector.env
+    dst: /etc/default/sadapp-local-network-collector
+    type: config|noreplace
+    file_info:
+      mode: 0600
+deb:
+  compression: xz
+rpm:
+  arch: __RPM_ARCH__
+  compression: gzip

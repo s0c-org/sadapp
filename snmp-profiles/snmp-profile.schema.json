@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sadapp.org/schemas/snmp-profile-v1.json",
+  "title": "SadApp SNMP Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile_name", "display_name", "description", "vendor", "device_classes", "state", "detection", "poll", "scalars", "tables", "traps"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "profile_name": { "$ref": "#/$defs/name" },
+    "display_name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "vendor": { "type": "string", "minLength": 1 },
+    "device_classes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+    "state": { "enum": ["enabled", "experimental", "disabled"] },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sys_object_id_prefixes", "sys_descr_regexes", "required_oids", "optional_oids", "priority", "minimum_confidence"],
+      "properties": {
+        "sys_object_id_prefixes": { "$ref": "#/$defs/oidArray" },
+        "sys_descr_regexes": { "type": "array", "items": { "type": "string" } },
+        "required_oids": { "$ref": "#/$defs/oidArray" },
+        "optional_oids": { "$ref": "#/$defs/oidArray" },
+        "priority": { "type": "integer" },
+        "minimum_confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "poll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaults"],
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timeout_ms", "retries", "max_parallel", "budget_weight"],
+          "properties": {
+            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "retries": { "type": "integer", "minimum": 0 },
+            "max_parallel": { "type": "integer", "minimum": 1 },
+            "budget_weight": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "scalars": { "type": "object", "additionalProperties": { "$ref": "#/$defs/scalar" } },
+    "tables": { "type": "object", "additionalProperties": { "$ref": "#/$defs/table" } },
+    "traps": { "type": "array", "items": { "$ref": "#/$defs/trap" } }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "metric": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*){0,2}$" },
+    "oid": { "type": "string", "pattern": "^\\.?[0-9]+(?:\\.[0-9]+)+$" },
+    "oidArray": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/oid" } },
+    "valueType": { "enum": ["gauge", "counter", "integer", "unsigned", "boolean", "string", "enum", "timeticks", "object_identifier"] },
+    "unit": { "enum": ["count", "percent", "bytes", "bits_per_second", "octets", "seconds", "milliseconds", "celsius", "rpm", "volts", "amps", "watts", "hertz", "decibels", "boolean", "text", "status"] },
+    "transform": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "object", "required": ["operation"], "properties": { "operation": { "enum": ["sum", "min", "max"] } }, "additionalProperties": false },
+        { "type": "object", "required": ["operation", "factor"], "properties": { "operation": { "const": "scale" }, "factor": { "type": "number" } }, "additionalProperties": false },
+        { "type": "object", "required": ["operation", "value"], "properties": { "operation": { "const": "offset" }, "value": { "type": "number" } }, "additionalProperties": false },
+        { "type": "object", "required": ["operation", "total_metric"], "properties": { "operation": { "enum": ["percentage", "used_from_total", "used_from_free"] }, "total_metric": { "$ref": "#/$defs/metric" } }, "additionalProperties": false },
+        { "type": "object", "required": ["operation", "values"], "properties": { "operation": { "const": "enum" }, "values": { "type": "object", "additionalProperties": { "type": "string" } } }, "additionalProperties": false }
+      ]
+    },
+    "scalar": {
+      "oneOf": [
+        { "$ref": "#/$defs/oid" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["oid", "type", "unit", "scale", "transform", "metric", "required", "priority", "timeout_ms"],
+          "properties": {
+            "oid": { "$ref": "#/$defs/oid" }, "type": { "$ref": "#/$defs/valueType" }, "unit": { "$ref": "#/$defs/unit" },
+            "scale": { "type": "number", "not": { "const": 0 } }, "transform": { "$ref": "#/$defs/transform" }, "metric": { "$ref": "#/$defs/metric" },
+            "required": { "type": "boolean" }, "priority": { "type": "integer" }, "timeout_ms": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "column": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)*$" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["oid_suffix", "type", "unit", "scale", "transform", "metric"],
+          "properties": {
+            "oid_suffix": { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)*$" }, "type": { "$ref": "#/$defs/valueType" }, "unit": { "$ref": "#/$defs/unit" },
+            "scale": { "type": "number", "not": { "const": 0 } }, "transform": { "$ref": "#/$defs/transform" }, "metric": { "$ref": "#/$defs/metric" }
+          }
+        }
+      ]
+    },
+    "table": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base_oid", "index_strategy", "columns", "max_rows", "cost"],
+      "properties": {
+        "base_oid": { "$ref": "#/$defs/oid" }, "index_strategy": { "enum": ["suffix", "integer", "inet_address", "mac_address"] },
+        "columns": { "type": "object", "additionalProperties": { "$ref": "#/$defs/column" } }, "max_rows": { "type": "integer", "minimum": 1, "maximum": 10000 }, "cost": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "trap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["oid", "event_key", "severity"],
+      "properties": {
+        "oid": { "$ref": "#/$defs/oid" }, "prefix": { "type": "boolean" }, "event_key": { "$ref": "#/$defs/name" },
+        "severity": { "enum": ["info", "warning", "critical", "recovery"] }, "resolves": { "type": ["string", "null"] },
+        "varbinds": { "type": "object", "additionalProperties": { "$ref": "#/$defs/metric" } }, "refresh_group": { "type": ["string", "null"] }, "exclusive": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "profile_name": "eaton-pdu",
+  "display_name": "Eaton Pdu",
+  "description": "Eaton Power Distribution Unit Monitoring Profile",
+  "vendor": "Eaton",
+  "device_classes": [
+    "pdu"
+  ],
+  "state": "experimental",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.534"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Eaton"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [],
+    "priority": 20,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "pdu_total_power_watts": {
+      "oid": "1.3.6.1.4.1.534.6.6.7.1.1.1.0",
+      "type": "integer",
+      "unit": "watts",
+      "scale": 1,
+      "transform": null,
+      "metric": "pdu_total_power_watts",
+      "required": false,
+      "priority": 0,
+      "timeout_ms": null
+    }
+  },
+  "tables": {
+    "outlets": {
+      "base_oid": "1.3.6.1.4.1.534.6.6.7.1.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "outlets.index"
+        },
+        "label": {
+          "oid_suffix": "2",
+          "type": "string",
+          "unit": "text",
+          "scale": 1,
+          "transform": null,
+          "metric": "outlets.label"
+        },
+        "current_ma": {
+          "oid_suffix": "3",
+          "type": "integer",
+          "unit": "amps",
+          "scale": 1,
+          "transform": null,
+          "metric": "outlets.current_ma"
+        },
+        "status": {
+          "oid_suffix": "4",
+          "type": "integer",
+          "unit": "count",
+          "scale": 1,
+          "transform": null,
+          "metric": "outlets.status"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    }
+  },
+  "traps": []
+}
