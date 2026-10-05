@@ -19,11 +19,6 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE},
     Method,
 };
-use sadapp_snmp_profile_engine::{
-    detect as detect_snmp_profiles, detection_bundle_checksum, metric_capability_group,
-    DetectionProfile, IdentityProbe,
-};
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::{
     net::{lookup_host, TcpStream},
@@ -60,7 +55,6 @@ const OID_HR_STORAGE_SIZE: &str = "1.3.6.1.2.1.25.2.3.1.5";
 const OID_HR_STORAGE_USED: &str = "1.3.6.1.2.1.25.2.3.1.6";
 const OID_HR_STORAGE_TYPE_FIXED_DISK: &str = "1.3.6.1.2.1.25.2.1.4";
 const OID_SNMP_SYS_OBJECT_ID: &str = "1.3.6.1.2.1.1.2.0";
-const OID_SNMP_SYS_DESCR: &str = "1.3.6.1.2.1.1.1.0";
 const SNMP_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(900);
 
 #[derive(Clone, Debug)]
@@ -940,7 +934,6 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
             unit: None,
             scale: 1.0,
             value_type: "GAUGE".into(),
-            required: false,
             labels: None,
         }]
     } else {
@@ -966,71 +959,6 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         }
         Some((name, version, checksum))
     };
-    let detection_context = if verify_only || payload.get("detectionBundle").is_none() {
-        None
-    } else {
-        let configured_profile = payload
-            .get("configuredProfile")
-            .and_then(Value::as_str)
-            .unwrap_or("auto");
-        Some((
-            configured_profile.to_owned(),
-            snmp_detection_bundle(payload.get("detectionBundle"))?,
-        ))
-    };
-    let detection_outcome =
-        if let Some((configured_profile, bundle)) = detection_context.as_ref() {
-            let identity_plan = [
-                SnmpPollEntry {
-                    oid: OID_SNMP_SYS_OBJECT_ID.into(),
-                    metric_key: "snmp.sys_object_id".into(),
-                    unit: None,
-                    scale: 1.0,
-                    value_type: "GAUGE".into(),
-                    required: false,
-                    labels: None,
-                },
-                SnmpPollEntry {
-                    oid: OID_SNMP_SYS_DESCR.into(),
-                    metric_key: "snmp.sys_descr".into(),
-                    unit: None,
-                    scale: 1.0,
-                    value_type: "GAUGE".into(),
-                    required: false,
-                    labels: None,
-                },
-            ];
-            let identity_args = snmp_arguments(
-                payload,
-                &task.secrets,
-                target,
-                port,
-                1_000,
-                0,
-                &identity_plan,
-            )?;
-            let identity_output = timeout(
-                Duration::from_secs(3),
-                context.command_executor.run("snmpget", &identity_args),
-            )
-            .await;
-            match identity_output {
-                Ok(Ok(output)) if output.success => parse_snmp_identity_probe(&output.stdout)
-                    .ok()
-                    .map(|identity| {
-                        detect_snmp_profiles(
-                            configured_profile,
-                            &bundle.profiles,
-                            &identity,
-                            &bundle.checksum,
-                        )
-                    }),
-                Ok(Ok(_)) => None,
-                Ok(Err(_)) | Err(_) => None,
-            }
-        } else {
-            None
-        };
     let args = snmp_arguments(
         payload,
         &task.secrets,
@@ -1067,35 +995,6 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         })));
     }
     let values = parse_snmp_output(&output.stdout, &poll_plan)?;
-    let mut group_counts =
-        std::collections::BTreeMap::<&'static str, (usize, usize, Vec<Value>)>::new();
-    let mut missing_metrics = Vec::new();
-    for (entry, value) in poll_plan.iter().zip(&values) {
-        let available = value
-            .and_then(|value| scale_snmp_value(value, entry.scale))
-            .is_some();
-        let group = metric_capability_group(&entry.metric_key);
-        let counts = group_counts.entry(group).or_default();
-        counts.0 += 1;
-        if available {
-            counts.1 += 1;
-        } else {
-            let missing = json!({ "metricKey": entry.metric_key, "oid": entry.oid });
-            counts.2.push(missing.clone());
-            missing_metrics.push(missing);
-        }
-    }
-    let capability_groups = group_counts
-        .into_iter()
-        .map(|(name, (requested, available, missing))| {
-            json!({
-                "name": name,
-                "requested": requested,
-                "available": available,
-                "status": if missing.is_empty() { "complete" } else if available > 0 { "partial" } else { "unavailable" },
-            })
-        })
-        .collect::<Vec<_>>();
     let (profile_name, profile_version, profile_checksum) =
         profile_metadata.ok_or_else(|| TaskError::internal("SNMP profile metadata is missing"))?;
     let observed_at = chrono::Utc::now().to_rfc3339();
@@ -1168,130 +1067,8 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         "success": true,
         "latencyMs": started.elapsed().as_secs_f64() * 1000.0,
         "sampleCount": samples.len(),
-        "partial": !missing_metrics.is_empty(),
-        "missingMetrics": missing_metrics,
-        "capabilityGroups": capability_groups,
-        "detectionStatus": if payload.get("detectionBundle").is_some() {
-            if detection_outcome.is_some() { "completed" } else { "unavailable" }
-        } else {
-            "not_due"
-        },
-        "detection": detection_outcome,
         "profile": { "name": profile_name, "version": profile_version, "checksum": profile_checksum }
     })))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SnmpDetectionBundle {
-    schema_version: u32,
-    checksum: String,
-    profiles: Vec<DetectionProfile>,
-}
-
-fn snmp_detection_bundle(value: Option<&Value>) -> Result<SnmpDetectionBundle, TaskError> {
-    let bundle: SnmpDetectionBundle = serde_json::from_value(
-        value
-            .cloned()
-            .ok_or_else(|| TaskError::invalid("detectionBundle is required"))?,
-    )
-    .map_err(|_| TaskError::invalid("detectionBundle has an invalid shape"))?;
-    if bundle.schema_version != 1 || bundle.profiles.is_empty() || bundle.profiles.len() > 64 {
-        return Err(TaskError::invalid(
-            "detectionBundle version or profile count is invalid",
-        ));
-    }
-    let mut names = std::collections::BTreeSet::new();
-    for profile in &bundle.profiles {
-        if profile.profile_name.is_empty()
-            || profile.profile_name.len() > 64
-            || !profile
-                .profile_name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-            || profile.schema_version == 0
-            || profile.schema_version > 1_000
-            || !profile.detection.minimum_confidence.is_finite()
-            || !(0.0..=1.0).contains(&profile.detection.minimum_confidence)
-            || !(-100_000..=100_000).contains(&profile.detection.priority)
-            || profile.detection.sys_object_id_prefixes.len() > 64
-            || profile.detection.sys_descr_regexes.len() > 64
-            || profile.detection.required_oids.len() > 64
-            || profile.detection.optional_oids.len() > 64
-            || profile
-                .detection
-                .sys_descr_regexes
-                .iter()
-                .any(|pattern| pattern.is_empty() || pattern.len() > 512)
-            || profile
-                .detection
-                .sys_object_id_prefixes
-                .iter()
-                .chain(&profile.detection.required_oids)
-                .chain(&profile.detection.optional_oids)
-                .any(|oid| oid.len() > 255 || !numeric_oid(oid))
-            || !names.insert(profile.profile_name.as_str())
-        {
-            return Err(TaskError::invalid(
-                "detectionBundle contains invalid profile metadata",
-            ));
-        }
-    }
-    if bundle.checksum.len() != 64 || !bundle.checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(TaskError::invalid("detectionBundle checksum is invalid"));
-    }
-    let checksum = detection_bundle_checksum(&bundle.profiles).map_err(TaskError::internal)?;
-    if !checksum.eq_ignore_ascii_case(&bundle.checksum) {
-        return Err(TaskError::invalid(
-            "detectionBundle checksum does not match its profiles",
-        ));
-    }
-    Ok(bundle)
-}
-
-fn parse_snmp_identity_probe(stdout: &[u8]) -> Result<IdentityProbe, TaskError> {
-    if stdout.is_empty() || stdout.len() > 2_048 {
-        return Err(TaskError::failed(
-            "SNMP_IDENTITY_INVALID",
-            "SNMP identity response was empty or oversized",
-        ));
-    }
-    let output = std::str::from_utf8(stdout)
-        .map_err(|_| TaskError::failed("SNMP_PARSE_FAILED", "SNMP identity was not UTF-8"))?;
-    let lines = output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-    if lines.len() != 2 {
-        return Err(TaskError::failed(
-            "SNMP_IDENTITY_INVALID",
-            "SNMP identity response did not contain both standard identity scalars",
-        ));
-    }
-    let sys_object_id = if lines[0].to_ascii_lowercase().contains("no such") {
-        None
-    } else {
-        parse_snmp_identity_output(lines[0].as_bytes()).ok()
-    };
-    let sys_descr = if lines[1].to_ascii_lowercase().contains("no such") || lines[1].len() > 1_024 {
-        None
-    } else {
-        let description = lines[1].trim_matches('"').trim();
-        (!description.is_empty() && !description.chars().any(char::is_control))
-            .then(|| description.to_owned())
-    };
-    let mut responsive_oids = std::collections::BTreeSet::new();
-    if sys_object_id.is_some() {
-        responsive_oids.insert(OID_SNMP_SYS_OBJECT_ID.to_owned());
-    }
-    Ok(IdentityProbe {
-        sys_object_id,
-        sys_descr,
-        responsive_oids,
-        ..IdentityProbe::default()
-    })
 }
 
 async fn poll_snmp_fixed_disk_usage(
@@ -1444,7 +1221,6 @@ struct SnmpPollEntry {
     unit: Option<String>,
     scale: f64,
     value_type: String,
-    required: bool,
     labels: Option<Map<String, Value>>,
 }
 
@@ -1486,22 +1262,12 @@ fn snmp_poll_plan(value: Option<&Value>) -> Result<Vec<SnmpPollEntry>, TaskError
             if value_type != "GAUGE" && value_type != "COUNTER" {
                 return Err(TaskError::invalid("pollPlan valueType is invalid"));
             }
-            let required = entry
-                .get("required")
-                .map(|value| {
-                    value
-                        .as_bool()
-                        .ok_or_else(|| TaskError::invalid("pollPlan required must be boolean"))
-                })
-                .transpose()?
-                .unwrap_or(false);
             Ok(SnmpPollEntry {
                 oid: oid.to_owned(),
                 metric_key: metric_key.to_owned(),
                 scale,
                 unit: entry.get("unit").and_then(Value::as_str).map(str::to_owned),
                 value_type: value_type.to_owned(),
-                required,
                 labels: entry.get("labels").and_then(Value::as_object).cloned(),
             })
         })
@@ -1627,28 +1393,16 @@ fn parse_snmp_output(
         .zip(poll_plan)
         .map(|(line, entry)| match parse_snmp_number(line) {
             Ok(value) => Ok(Some(value)),
-            Err(error)
-                if matches!(
-                    error.code.as_str(),
-                    "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
-                ) && !entry.required =>
-            {
+            Err(error) if matches!(error.code.as_str(), "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE") => {
                 Ok(None)
             }
-            Err(error)
-                if matches!(
-                    error.code.as_str(),
-                    "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
-                ) =>
-            {
-                Err(TaskError::failed(
-                    "SNMP_REQUIRED_METRIC_UNAVAILABLE",
-                    format!(
-                        "required metric '{}' (OID {}) is unavailable or unusable",
-                        entry.metric_key, entry.oid
-                    ),
-                ))
-            }
+            Err(error) if error.code == "SNMP_PARSE_FAILED" => Err(TaskError::failed(
+                "SNMP_PARSE_FAILED",
+                format!(
+                    "metric '{}' (OID {}) returned a non-numeric value; verify the selected device profile",
+                    entry.metric_key, entry.oid
+                ),
+            )),
             Err(error) => Err(error),
         })
         .collect::<Result<Vec<_>, _>>()
@@ -2037,11 +1791,7 @@ impl TaskError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sadapp_snmp_profile_engine::{Detection, ProfileState};
-    use std::{
-        collections::{HashMap, VecDeque},
-        sync::Mutex,
-    };
+    use std::{collections::HashMap, sync::Mutex};
     use tokio::sync::RwLock;
 
     #[derive(Debug)]
@@ -2067,37 +1817,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct SequenceMockExecutor {
-        outputs: Mutex<VecDeque<CommandOutput>>,
-        calls: Mutex<Vec<Vec<String>>>,
-    }
-
-    impl CommandExecutor for SequenceMockExecutor {
-        fn run<'a>(
-            &'a self,
-            _program: &'a str,
-            args: &'a [String],
-        ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
-            self.calls.lock().unwrap().push(args.to_vec());
-            Box::pin(async move {
-                self.outputs
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .ok_or_else(|| anyhow::anyhow!("mock output exhausted"))
-            })
-        }
-    }
-
     fn snmp_task(target: &str) -> TaskLease {
-        let detection_profiles = vec![DetectionProfile {
-            profile_name: "generic-host".into(),
-            schema_version: 1,
-            state: ProfileState::Enabled,
-            detection: Detection::default(),
-        }];
-        let detection_checksum = detection_bundle_checksum(&detection_profiles).unwrap();
         TaskLease {
             id: "task-1".into(),
             task_type: TaskType::CollectSnmp,
@@ -2108,11 +1828,9 @@ mod tests {
                 "port": 161,
                 "version": "2c",
                 "profile": { "name": "generic-host", "version": 1, "checksum": "a".repeat(64) },
-                "configuredProfile": "auto",
-                "detectionBundle": { "schemaVersion": 1, "checksum": detection_checksum, "profiles": detection_profiles },
                 "pollPlan": [
-                    { "oid": "1.3.6.1.2.1.1.3.0", "metricKey": "uptime", "unit": "seconds", "scale": 0.01, "valueType": "GAUGE", "required": true },
-                    { "oid": "1.3.6.1.2.1.2.1.0", "metricKey": "interface.count", "unit": "count", "scale": 1.0, "valueType": "GAUGE", "required": false }
+                    { "oid": "1.3.6.1.2.1.1.3.0", "metricKey": "uptime", "unit": "seconds", "scale": 0.01, "valueType": "GAUGE" },
+                    { "oid": "1.3.6.1.2.1.2.1.0", "metricKey": "interface.count", "unit": "count", "scale": 1.0, "valueType": "GAUGE" }
                 ],
                 "timeoutMs": 1000,
                 "retries": 1,
@@ -2497,7 +2215,6 @@ mod tests {
                 unit: None,
                 scale: 1.0,
                 value_type: "GAUGE".into(),
-                required: false,
                 labels: None,
             },
             SnmpPollEntry {
@@ -2506,7 +2223,6 @@ mod tests {
                 unit: None,
                 scale: 1.0,
                 value_type: "GAUGE".into(),
-                required: false,
                 labels: None,
             },
             SnmpPollEntry {
@@ -2515,35 +2231,29 @@ mod tests {
                 unit: None,
                 scale: 1.0,
                 value_type: "GAUGE".into(),
-                required: false,
                 labels: None,
             },
         ];
         assert_eq!(
-            parse_snmp_output(
-                b"No Such Object available\nSTRING: \"private device description\"\n42\n",
-                &poll_plan,
-            )
-            .unwrap(),
+            parse_snmp_output(b"No Such Object available\nNaN\n42\n", &poll_plan).unwrap(),
             vec![None, None, Some(42.0)],
         );
     }
 
     #[test]
-    fn fails_for_unavailable_required_metrics_without_echoing_device_values() {
+    fn identifies_non_numeric_metric_and_oid_without_echoing_device_value() {
         let poll_plan = [SnmpPollEntry {
             oid: "1.3.6.1.2.1.1.3.0".into(),
             metric_key: "system.uptime.seconds".into(),
             unit: None,
             scale: 1.0,
             value_type: "GAUGE".into(),
-            required: true,
             labels: None,
         }];
         let error =
             parse_snmp_output(b"STRING: \"private device description\"\n", &poll_plan).unwrap_err();
 
-        assert_eq!(error.code, "SNMP_REQUIRED_METRIC_UNAVAILABLE");
+        assert_eq!(error.code, "SNMP_PARSE_FAILED");
         assert!(error.message.contains("system.uptime.seconds"));
         assert!(error.message.contains("1.3.6.1.2.1.1.3.0"));
         assert!(!error.message.contains("private device description"));
@@ -2674,100 +2384,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reports_partial_metric_coverage_without_echoing_unusable_values() {
-        let directory = tempfile::tempdir().unwrap();
-        let executor = Arc::new(MockExecutor {
-            output: CommandOutput {
-                success: true,
-                stdout: b"Timeticks: (1234) 0:00:12.34\nSTRING: \"private device description\"\n"
-                    .to_vec(),
-                stderr: Vec::new(),
-            },
-            error: None,
-            calls: Mutex::new(Vec::new()),
-        });
-        let context = test_context(directory.path(), executor);
-
-        let outcome = collect_snmp(&context, &snmp_task("192.168.1.20"))
-            .await
-            .unwrap();
-
-        assert_eq!(outcome["sampleCount"], 1);
-        assert_eq!(outcome["partial"], true);
-        assert_eq!(outcome["missingMetrics"][0]["metricKey"], "interface.count");
-        assert_eq!(outcome["missingMetrics"][0]["oid"], "1.3.6.1.2.1.2.1.0");
-        assert_eq!(outcome["capabilityGroups"][0]["name"], "health");
-        assert_eq!(outcome["capabilityGroups"][0]["status"], "complete");
-        assert_eq!(outcome["capabilityGroups"][1]["name"], "interfaces");
-        assert_eq!(outcome["capabilityGroups"][1]["status"], "unavailable");
-        assert!(!Value::Object(outcome.clone())
-            .to_string()
-            .contains("private device description"));
-    }
-
-    #[tokio::test]
-    async fn applies_shared_profile_detection_to_bounded_identity_response() {
-        let directory = tempfile::tempdir().unwrap();
-        let detection_profiles = vec![
-            DetectionProfile {
-                profile_name: "generic-host".into(),
-                schema_version: 1,
-                state: ProfileState::Enabled,
-                detection: Detection::default(),
-            },
-            DetectionProfile {
-                profile_name: "esphome-snmp".into(),
-                schema_version: 1,
-                state: ProfileState::Enabled,
-                detection: Detection {
-                    sys_object_id_prefixes: vec!["1.3.6.1.4.1.99999".into()],
-                    sys_descr_regexes: vec!["(?i)esphome".into()],
-                    minimum_confidence: 0.8,
-                    ..Detection::default()
-                },
-            },
-        ];
-        let detection_checksum = detection_bundle_checksum(&detection_profiles).unwrap();
-        let executor = Arc::new(SequenceMockExecutor {
-            outputs: Mutex::new(VecDeque::from([
-                CommandOutput {
-                    success: true,
-                    stdout: b"1.3.6.1.4.1.99999.1\nESPHome sensor\n".to_vec(),
-                    stderr: Vec::new(),
-                },
-                CommandOutput {
-                    success: true,
-                    stdout: b"Timeticks: (1234) 0:00:12.34\n2\n".to_vec(),
-                    stderr: Vec::new(),
-                },
-            ])),
-            calls: Mutex::new(Vec::new()),
-        });
-        let context = test_context(directory.path(), executor.clone());
-        let mut task = snmp_task("192.168.1.20");
-        task.payload.insert(
-            "detectionBundle".into(),
-            json!({
-                "schemaVersion": 1,
-                "checksum": detection_checksum,
-                "profiles": detection_profiles,
-            }),
-        );
-
-        let outcome = collect_snmp(&context, &task).await.unwrap();
-
-        assert_eq!(outcome["detectionStatus"], "completed");
-        assert_eq!(outcome["detection"]["detectedProfile"], "esphome-snmp");
-        assert_eq!(outcome["detection"]["effectiveProfile"], "esphome-snmp");
-        assert_eq!(outcome["detection"]["confidence"], 0.95);
-        let calls = executor.calls.lock().unwrap();
-        assert!(calls.len() >= 2);
-        assert!(calls[0].contains(&OID_SNMP_SYS_OBJECT_ID.to_string()));
-        assert!(calls[0].contains(&OID_SNMP_SYS_DESCR.to_string()));
-        assert!(calls[1].contains(&"1.3.6.1.2.1.1.3.0".to_string()));
-    }
-
-    #[tokio::test]
     async fn verifies_snmp_credentials_using_only_sys_object_id_without_spooling() {
         let directory = tempfile::tempdir().unwrap();
         let executor = Arc::new(MockExecutor {
@@ -2841,7 +2457,7 @@ mod tests {
         let executor = Arc::new(MockExecutor {
             output: CommandOutput {
                 success: true,
-                stdout: b"Timeticks: (200) 0:00:02.00\nNo Such Object available\n".to_vec(),
+                stdout: b"No Such Object available\n2\n".to_vec(),
                 stderr: Vec::new(),
             },
             error: None,
@@ -2852,11 +2468,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome["sampleCount"], 1);
-        assert_eq!(outcome["partial"], true);
-        assert_eq!(outcome["missingMetrics"][0]["metricKey"], "interface.count");
         let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
         assert_eq!(batch["samples"].as_array().unwrap().len(), 1);
-        assert_eq!(batch["samples"][0]["metricKey"], "uptime");
+        assert_eq!(batch["samples"][0]["metricKey"], "interface.count");
     }
 
     #[tokio::test]
@@ -2876,15 +2490,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!error.message.contains("very-secret"));
-        let calls_after_private_target = executor.calls.lock().unwrap().len();
-        assert_eq!(calls_after_private_target, 2);
         let public_error = collect_snmp(&context, &snmp_task("8.8.8.8"))
             .await
             .unwrap_err();
         assert_eq!(public_error.code, "TARGET_POLICY_REJECTED");
-        assert_eq!(
-            executor.calls.lock().unwrap().len(),
-            calls_after_private_target
-        );
+        assert_eq!(executor.calls.lock().unwrap().len(), 1);
     }
 }
