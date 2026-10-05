@@ -6,8 +6,9 @@ COPY snmp-profile-engine ./snmp-profile-engine
 WORKDIR /build/local-network-collector
 RUN cargo build --locked --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
+	&& apt-get upgrade --yes \
 	&& apt-get install --no-install-recommends --yes ca-certificates curl iputils-ping snmp \
 	&& rm -rf /var/lib/apt/lists/*
 RUN useradd --system --home-dir /var/lib/sadapp-local-network-collector --create-home sadapp-local-network-collector

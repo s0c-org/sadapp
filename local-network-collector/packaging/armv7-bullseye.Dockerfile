@@ -33,5 +33,6 @@ RUN for binary in \
 done
 
 FROM scratch AS artifacts
+USER 65532:65532
 COPY --from=builder /build/host-agent/target/armv7-unknown-linux-gnueabihf/release/sadapp-host-agent /sadapp-host-agent
 COPY --from=builder /build/local-network-collector/target/armv7-unknown-linux-gnueabihf/release/sadapp-local-network-collector /sadapp-local-network-collector
