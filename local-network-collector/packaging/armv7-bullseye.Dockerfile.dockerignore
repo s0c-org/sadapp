@@ -17,3 +17,9 @@ host-agent/dist/**
 !local-network-collector/src/**
 local-network-collector/target/**
 local-network-collector/dist/**
+!snmp-profile-engine/
+!snmp-profile-engine/Cargo.toml
+!snmp-profile-engine/Cargo.lock
+!snmp-profile-engine/src/
+!snmp-profile-engine/src/**
+snmp-profile-engine/target/**

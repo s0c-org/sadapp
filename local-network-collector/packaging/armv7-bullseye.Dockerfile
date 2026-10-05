@@ -21,6 +21,7 @@ WORKDIR /build/local-network-collector
 COPY local-network-collector/Cargo.toml local-network-collector/Cargo.lock ./
 COPY local-network-collector/.cargo/ .cargo/
 COPY local-network-collector/src/ src/
+COPY snmp-profile-engine/ /build/snmp-profile-engine/
 RUN cargo build --locked --release --target armv7-unknown-linux-gnueabihf
 
 RUN for binary in \
