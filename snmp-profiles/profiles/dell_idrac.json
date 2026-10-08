@@ -13,7 +13,8 @@
       "1.3.6.1.4.1.674"
     ],
     "sys_descr_regexes": [
-      "(?i)Dell"
+      "(?i)Remote Access Controller",
+      "(?i)iDRAC"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

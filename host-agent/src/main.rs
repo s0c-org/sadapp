@@ -2421,6 +2421,22 @@ mod tests {
         assert_eq!(docker_cpu_percent(100, 1_100, Some((150, 1_000)), 2), None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn docker_stats_helpers_match_docker_cli() {
+        assert!(docker_api_at_least("1.52", 1, 41));
+        assert!(docker_api_at_least("1.41", 1, 41));
+        assert!(!docker_api_at_least("1.40", 1, 41));
+        let v2 = serde_json::json!({ "memory_stats": { "usage": 1_000, "stats": { "inactive_file": 400 } } });
+        assert_eq!(docker_memory_usage(&v2), Some(600));
+        let v1 = serde_json::json!({ "memory_stats": { "usage": 1_000, "stats": { "total_inactive_file": 100 } } });
+        assert_eq!(docker_memory_usage(&v1), Some(900));
+        assert_eq!(
+            docker_memory_usage(&serde_json::json!({ "memory_stats": {} })),
+            None
+        );
+    }
+
     #[test]
     fn parses_proxmox_qemu_and_lxc_inventory_fields() {
         let rows = json!([
@@ -3015,6 +3031,25 @@ fn docker_u64(value: Option<&Value>) -> Option<u64> {
 }
 
 #[cfg(unix)]
+fn docker_api_at_least(version: &str, major: u64, minor: u64) -> bool {
+    let mut parts = version
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0));
+    let found = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    found >= (major, minor)
+}
+
+#[cfg(unix)]
+/// Matches `docker stats`: page cache that the kernel can reclaim is not counted as used.
+fn docker_memory_usage(stats: &Value) -> Option<u64> {
+    let usage = docker_u64(stats.pointer("/memory_stats/usage"))?;
+    let cache = docker_u64(stats.pointer("/memory_stats/stats/inactive_file"))
+        .or_else(|| docker_u64(stats.pointer("/memory_stats/stats/total_inactive_file")))
+        .unwrap_or(0);
+    Some(usage.saturating_sub(cache))
+}
+
+#[cfg(unix)]
 fn docker_cpu_percent(
     current_cpu: u64,
     current_system: u64,
@@ -3160,6 +3195,14 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
     let engine_version = docker_string(version.get("Version"));
     let api_version = docker_string(version.get("ApiVersion"))?;
     let api = format!("/v{api_version}");
+    // one-shot (API >= 1.41) returns immediately instead of waiting ~1s for a second sample,
+    // so all running containers fit into the stats budget. CPU deltas use our own history.
+    let stats_query = if docker_api_at_least(&api_version, 1, 41) {
+        "stream=false&one-shot=true"
+    } else {
+        "stream=false"
+    };
+    let stats_started = Instant::now();
     let listed = docker_api_get(&socket_path, &format!("{api}/containers/json?all=1"))?;
     let entries = listed.as_array()?;
     let mut containers = Vec::with_capacity(entries.len().min(500));
@@ -3244,10 +3287,13 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
                         }
                     })
             });
-        let stats = if inspect_details && state.as_deref() == Some("running") {
+        let stats = if entry_index < 256
+            && stats_started.elapsed() < Duration::from_secs(20)
+            && state.as_deref() == Some("running")
+        {
             docker_api_get(
                 &socket_path,
-                &format!("{api}/containers/{container_id}/stats?stream=false"),
+                &format!("{api}/containers/{container_id}/stats?{stats_query}"),
             )
         } else {
             None
@@ -3266,9 +3312,11 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
                 .unwrap_or(1);
             let previous = cpu_history.get(&container_id).copied();
             let baseline = previous.or_else(|| {
-                Some((
+                let system = docker_u64(stats.pointer("/precpu_stats/system_cpu_usage"))?;
+                // one-shot responses carry an empty precpu sample; it is not a baseline.
+                (system > 0).then_some((
                     docker_u64(stats.pointer("/precpu_stats/cpu_usage/total_usage"))?,
-                    docker_u64(stats.pointer("/precpu_stats/system_cpu_usage"))?,
+                    system,
                 ))
             });
             cpu_history.insert(container_id.clone(), (cpu_usage, system_usage));
@@ -3276,9 +3324,7 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
         });
         seen.push(container_id.clone());
 
-        let memory_usage = stats
-            .as_ref()
-            .and_then(|stats| docker_u64(stats.pointer("/memory_stats/usage")));
+        let memory_usage = stats.as_ref().and_then(docker_memory_usage);
         let memory_limit = stats
             .as_ref()
             .and_then(|stats| docker_u64(stats.pointer("/memory_stats/limit")));

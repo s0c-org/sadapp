@@ -13,7 +13,9 @@
       "1.3.6.1.4.1.11"
     ],
     "sys_descr_regexes": [
-      "(?i)HP"
+      "(?i)ProCurve",
+      "(?i)\\bSwitch\\b",
+      "(?i)ArubaOS"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

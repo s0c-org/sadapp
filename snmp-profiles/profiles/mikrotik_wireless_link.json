@@ -13,7 +13,8 @@
       "1.3.6.1.4.1.14988"
     ],
     "sys_descr_regexes": [
-      "(?i)MikroTik"
+      "(?i)MikroTik",
+      "(?i)RouterOS"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

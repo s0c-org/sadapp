@@ -158,6 +158,8 @@ struct ScoredProfile {
     evidence: Vec<DetectionEvidence>,
     prefix_length: usize,
     priority: i32,
+    experimental: bool,
+    descr_matched: bool,
 }
 
 pub fn detect(
@@ -173,14 +175,21 @@ pub fn detect(
     };
     let mut candidates = profiles
         .iter()
-        .filter(|profile| profile.state.is_enabled())
+        .filter(|profile| profile.state.is_selectable())
         .map(|profile| score_profile(profile, identity))
         .filter(|candidate| candidate.confidence > 0.0)
+        // Experimental profiles are not validated on real hardware yet, so automatic
+        // selection needs both vendor evidences: a sysObjectID enterprise prefix and
+        // a sysDescr signature. A hostname alone in sysDescr must not select them.
+        .filter(|candidate| {
+            !candidate.experimental || (candidate.prefix_length > 0 && candidate.descr_matched)
+        })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
         right
             .confidence
             .total_cmp(&left.confidence)
+            .then_with(|| left.experimental.cmp(&right.experimental))
             .then_with(|| right.priority.cmp(&left.priority))
             .then_with(|| right.prefix_length.cmp(&left.prefix_length))
             .then_with(|| left.profile.cmp(&right.profile))
@@ -188,6 +197,7 @@ pub fn detect(
     let ambiguous = candidates.get(1).is_some_and(|second| {
         let first = &candidates[0];
         first.prefix_length == second.prefix_length
+            && first.experimental == second.experimental
             && first.priority == second.priority
             && (first.confidence - second.confidence).abs() < f64::EPSILON
     });
@@ -250,6 +260,7 @@ fn score_profile(profile: &DetectionProfile, identity: &IdentityProbe) -> Scored
     });
     let mut confidence: f64 = 0.0;
     let mut evidence = Vec::new();
+    let mut descr_matched = false;
     if let Some(prefix) = prefix {
         confidence = 0.9;
         evidence.push(DetectionEvidence {
@@ -280,6 +291,7 @@ fn score_profile(profile: &DetectionProfile, identity: &IdentityProbe) -> Scored
             .iter()
             .any(|pattern| Regex::new(pattern).is_ok_and(|regex| regex.is_match(description)))
         {
+            descr_matched = true;
             confidence = confidence.max(0.95);
             evidence.push(DetectionEvidence {
                 kind: "sys_descr_regex".to_string(),
@@ -295,6 +307,8 @@ fn score_profile(profile: &DetectionProfile, identity: &IdentityProbe) -> Scored
         evidence,
         prefix_length: prefix.map_or(0, |value| value.len()),
         priority: profile.detection.priority,
+        experimental: profile.state == ProfileState::Experimental,
+        descr_matched,
     }
 }
 
@@ -328,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn prefers_description_evidence_and_ignores_experimental_profiles() {
+    fn prefers_enabled_profile_over_equally_matching_experimental_profile() {
         let profiles = [
             profile(
                 "generic-host",
@@ -364,6 +378,89 @@ mod tests {
         assert_eq!(result.effective_profile, "esphome-snmp");
         assert_eq!(result.confidence, 0.95);
         assert_eq!(result.registry_checksum, "registry-sha");
+    }
+
+    #[test]
+    fn auto_selects_experimental_profile_with_vendor_prefix_and_description() {
+        let profiles = [
+            profile("generic-host", ProfileState::Enabled, "1.3.6.1.2.1", "(?i)^$"),
+            profile(
+                "linux-net-snmp",
+                ProfileState::Enabled,
+                "1.3.6.1.4.1.2021",
+                "(?i)Net-SNMP",
+            ),
+            profile(
+                "synology-nas",
+                ProfileState::Experimental,
+                "1.3.6.1.4.1.6574",
+                "(?i)Synology",
+            ),
+        ];
+        let result = detect(
+            "auto",
+            &profiles,
+            &IdentityProbe {
+                sys_object_id: Some("1.3.6.1.4.1.6574.1".into()),
+                sys_descr: Some("Synology DiskStation".into()),
+                ..IdentityProbe::default()
+            },
+            "registry-sha",
+        );
+
+        assert_eq!(result.detected_profile.as_deref(), Some("synology-nas"));
+        assert_eq!(result.effective_profile, "synology-nas");
+        assert!(!result.ambiguous);
+    }
+
+    #[test]
+    fn experimental_profile_needs_both_prefix_and_description_for_auto_selection() {
+        let profiles = [profile(
+            "dell-idrac",
+            ProfileState::Experimental,
+            "1.3.6.1.4.1.674.10892.5",
+            "(?i)Remote Access Controller",
+        )];
+        let description_only = detect(
+            "auto",
+            &profiles,
+            &IdentityProbe {
+                sys_object_id: Some("1.3.6.1.4.1.8072.3.2.10".into()),
+                sys_descr: Some("Linux remote access controller lab 5.15".into()),
+                ..IdentityProbe::default()
+            },
+            "registry-sha",
+        );
+        let prefix_only = detect(
+            "auto",
+            &profiles,
+            &IdentityProbe {
+                sys_object_id: Some("1.3.6.1.4.1.674.10892.5".into()),
+                sys_descr: Some("Embedded agent".into()),
+                ..IdentityProbe::default()
+            },
+            "registry-sha",
+        );
+        let disabled = detect(
+            "auto",
+            &[profile(
+                "dell-idrac",
+                ProfileState::Disabled,
+                "1.3.6.1.4.1.674.10892.5",
+                "(?i)Remote Access Controller",
+            )],
+            &IdentityProbe {
+                sys_object_id: Some("1.3.6.1.4.1.674.10892.5".into()),
+                sys_descr: Some("Dell Remote Access Controller".into()),
+                ..IdentityProbe::default()
+            },
+            "registry-sha",
+        );
+
+        assert_eq!(description_only.detected_profile, None);
+        assert_eq!(prefix_only.detected_profile, None);
+        assert_eq!(disabled.detected_profile, None);
+        assert_eq!(prefix_only.effective_profile, "generic-host");
     }
 
     #[test]

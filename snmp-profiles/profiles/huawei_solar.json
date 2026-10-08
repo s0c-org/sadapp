@@ -13,7 +13,9 @@
       "1.3.6.1.4.1.2011"
     ],
     "sys_descr_regexes": [
-      "(?i)Huawei"
+      "(?i)SmartLogger",
+      "(?i)SUN2000",
+      "(?i)inverter"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

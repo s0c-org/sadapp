@@ -38,7 +38,8 @@ for command_name in cargo nfpm rustup; do
   }
 done
 
-case "${TARGET}" in
+# Prebuilt binaries are only packaged, so no cross linker is needed.
+[[ -n "${PREBUILT_BINARY:-}" ]] || case "${TARGET}" in
   x86_64-unknown-linux-musl)
     command -v musl-gcc >/dev/null 2>&1 || {
       echo "musl-gcc is required (Debian/Ubuntu: sudo apt install musl-tools)" >&2

@@ -13,7 +13,8 @@
       "1.3.6.1.4.1.9"
     ],
     "sys_descr_regexes": [
-      "(?i)Cisco"
+      "(?i)Catalyst",
+      "(?i)Cisco IOS"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

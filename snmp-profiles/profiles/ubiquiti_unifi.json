@@ -13,7 +13,11 @@
       "1.3.6.1.4.1.41112"
     ],
     "sys_descr_regexes": [
-      "(?i)Ubiquiti"
+      "(?i)Ubiquiti",
+      "(?i)UniFi",
+      "(?i)airOS",
+      "(?i)EdgeOS",
+      "(?i)EdgeSwitch"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

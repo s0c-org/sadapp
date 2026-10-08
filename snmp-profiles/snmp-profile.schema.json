@@ -75,7 +75,7 @@
           "properties": {
             "oid": { "$ref": "#/$defs/oid" }, "type": { "$ref": "#/$defs/valueType" }, "unit": { "$ref": "#/$defs/unit" },
             "scale": { "type": "number", "not": { "const": 0 } }, "transform": { "$ref": "#/$defs/transform" }, "metric": { "$ref": "#/$defs/metric" },
-            "required": { "type": "boolean" }, "priority": { "type": "integer" }, "timeout_ms": { "type": ["integer", "null"], "minimum": 1 }
+            "required": { "type": "boolean" }, "optional": { "type": "boolean" }, "priority": { "type": "integer" }, "timeout_ms": { "type": ["integer", "null"], "minimum": 1 }
           }
         }
       ]

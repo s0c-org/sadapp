@@ -13,6 +13,7 @@
       "1.3.6.1.4.1.5528"
     ],
     "sys_descr_regexes": [
+      "(?i)NetBotz",
       "(?i)APC"
     ],
     "required_oids": [

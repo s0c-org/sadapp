@@ -13,7 +13,9 @@
       "1.3.6.1.4.1.12356"
     ],
     "sys_descr_regexes": [
-      "(?i)Fortinet"
+      "(?i)Fortinet",
+      "(?i)FortiGate",
+      "(?i)FortiOS"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"
