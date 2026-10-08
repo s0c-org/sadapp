@@ -21,6 +21,8 @@ overrides:
       - iputils
 scripts:
   postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh
 contents:
   - src: dist/.package-root/sadapp-local-network-collector
     dst: /usr/bin/sadapp-local-network-collector

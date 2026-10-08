@@ -105,6 +105,13 @@ fn collect_resource_usage(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().skip(1).eq(["--version"]) {
+        println!(
+            "Sadapp Local Network Collector {}",
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -175,12 +182,14 @@ async fn main() -> Result<()> {
         telemetry_spool: telemetry_spool.clone(),
         command_executor: Arc::new(TokioCommandExecutor),
     };
+    const SATURATED_RECLAIM_DELAY: Duration = Duration::from_millis(500);
     let mut tasks = JoinSet::new();
     let mut backoff = config.heartbeat_interval.min(Duration::from_secs(60));
     let mut resource_system = System::new_all();
     resource_system.refresh_all();
 
     loop {
+        let mut claim_saturated = false;
         if draining.load(Ordering::SeqCst) && running.load(Ordering::SeqCst) == 0 {
             break;
         }
@@ -226,6 +235,8 @@ async fn main() -> Result<()> {
                 if response.drain {
                     draining.store(true, Ordering::SeqCst);
                 }
+                claim_saturated =
+                    heartbeat.claim_limit > 0 && response.tasks.len() >= heartbeat.claim_limit;
                 info!(collector_id = %collector_credentials.collector_id, config_revision = response.config_revision, applied_config_revision = heartbeat.applied_config_revision, running_tasks = running_count, queue_depth = spool_stats.0, leased_tasks = response.tasks.len(), drain = response.drain, next_heartbeat_seconds = response.next_heartbeat_seconds, "collector heartbeat accepted");
                 if let Some(configuration) = response.configuration {
                     let network_count = configuration
@@ -294,6 +305,11 @@ async fn main() -> Result<()> {
         let jitter = rand::thread_rng().gen_range(0.9..=1.1);
         tokio::select! {
             _ = sleep(next_interval.mul_f64(jitter)) => {},
+            // When the last claim filled every free slot, more work is likely queued:
+            // heartbeat again as soon as a slot frees up instead of idling.
+            Some(_) = tasks.join_next(), if claim_saturated => {
+                sleep(SATURATED_RECLAIM_DELAY).await;
+            },
             _ = tokio::signal::ctrl_c() => { info!("shutdown requested; entering drain mode"); draining.store(true, Ordering::SeqCst); }
         }
         while tasks.try_join_next().is_some() {}

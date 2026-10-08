@@ -8,7 +8,9 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
@@ -21,8 +23,14 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, PidExt, ProcessExt, System, SystemExt};
 
+#[cfg(windows)]
+mod windows;
+mod windows_config;
+
 const DEFAULT_ENDPOINT: &str = "https://sadapp.org/api/v1/agent";
+#[cfg(not(windows))]
 const DEFAULT_QUEUE_PATH: &str = "/var/lib/sadapp-host-agent/telemetry-queue.json";
+#[cfg(not(windows))]
 const DEFAULT_UPDATE_STATE_PATH: &str = "/var/lib/sadapp-host-agent/update-state.json";
 const DEFAULT_QUEUE_MAX_SAMPLES: usize = 200;
 const MAX_QUEUE_MAX_SAMPLES: usize = 10_000;
@@ -74,10 +82,10 @@ struct StaticInventory {
     kernel_version: String,
     processor: String,
     cpu_frequency_mhz: u64,
-    aes_ni_enabled: bool,
-    virtualization_hw_enabled: bool,
+    aes_ni_enabled: Option<bool>,
+    virtualization_hw_enabled: Option<bool>,
     distro: String,
-    vm_type: String,
+    vm_type: Option<String>,
     ipv4_online: bool,
     ipv6_online: bool,
     ipv4_network_info: Option<Ipv4NetworkInfo>,
@@ -89,7 +97,7 @@ struct StaticInventory {
     provider: Option<String>,
     owner_team: Option<String>,
     architecture: String,
-    timezone: String,
+    timezone: Option<String>,
     machine_id: Option<String>,
     agent_version: String,
 }
@@ -105,6 +113,17 @@ struct CollectorHealth {
 }
 
 impl CollectorHealth {
+    fn unsupported(name: &str, interval_seconds: u64, reason: &str) -> Self {
+        Self {
+            name: name.into(),
+            status: "unsupported".into(),
+            last_collected_at: unix_timestamp(),
+            duration_ms: 0,
+            interval_seconds,
+            last_error: Some(reason.into()),
+        }
+    }
+
     fn completed(
         name: &str,
         started_at: Instant,
@@ -112,6 +131,25 @@ impl CollectorHealth {
         available: bool,
         unavailable_message: Option<&str>,
     ) -> Self {
+        if cfg!(windows)
+            && matches!(
+                name,
+                "ports"
+                    | "sensors"
+                    | "gpu"
+                    | "docker"
+                    | "virtualization"
+                    | "logs"
+                    | "smart"
+                    | "packages"
+            )
+        {
+            return Self::unsupported(
+                name,
+                interval_seconds,
+                "Not supported by the Windows prototype",
+            );
+        }
         Self {
             name: name.to_string(),
             status: if available {
@@ -138,6 +176,9 @@ struct ConfigurationHealth {
     interval_source: String,
     queue_source: String,
     update_channel_source: String,
+    platform: &'static str,
+    execution_mode: &'static str,
+    credential_storage: &'static str,
 }
 
 #[derive(Clone, Serialize)]
@@ -252,10 +293,7 @@ impl TelemetryQueue {
     fn persist(&self) -> io::Result<()> {
         let encoded = serde_json::to_vec(&self.state)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let temp_path = self.path.with_extension("tmp");
-        fs::write(&temp_path, encoded)?;
-        set_private_file_permissions(&temp_path)?;
-        fs::rename(temp_path, &self.path)
+        persist_private_json(&self.path, &encoded)
     }
 
     fn len(&self) -> usize {
@@ -308,9 +346,44 @@ fn set_private_file_permissions(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
-#[cfg(not(unix))]
-fn set_private_file_permissions(_path: &Path) -> io::Result<()> {
-    Ok(())
+fn persist_private_json(path: &Path, data: &[u8]) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::atomic_write(path, data, false)
+    }
+    #[cfg(not(windows))]
+    {
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, data)?;
+        set_private_file_permissions(&temp_path)?;
+        fs::rename(temp_path, path)
+    }
+}
+
+fn default_queue_path() -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        Ok(windows::state_dir()?
+            .join("state")
+            .join("telemetry-queue.json"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(PathBuf::from(DEFAULT_QUEUE_PATH))
+    }
+}
+
+fn default_update_state_path() -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        Ok(windows::state_dir()?
+            .join("state")
+            .join("update-state.json"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(PathBuf::from(DEFAULT_UPDATE_STATE_PATH))
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -379,15 +452,19 @@ struct ServerStatus {
     kernel_version: String,
     processor: String,
     cpu_frequency_mhz: u64,
-    aes_ni_enabled: bool,
-    virtualization_hw_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aes_ni_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    virtualization_hw_enabled: Option<bool>,
     distro: String,
-    vm_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vm_type: Option<String>,
     ipv4_online: bool,
     ipv6_online: bool,
     disk_total_bytes: u64,
     uptime_seconds: u64,
-    load_average: LoadAverage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_average: Option<LoadAverage>,
     cpu_usage_percent: f32,
     cpu_count: usize,
     memory_total_bytes: u64,
@@ -412,7 +489,8 @@ struct ServerStatus {
     provider: Option<String>,
     owner_team: Option<String>,
     architecture: String,
-    timezone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timezone: Option<String>,
     machine_id: Option<String>,
     agent_version: String,
     agent_runtime: Option<AgentRuntime>,
@@ -633,7 +711,11 @@ impl UpdateLifecycleState {
             } else {
                 String::from("current")
             },
-            verification_mode: String::from("os_package_signature"),
+            verification_mode: if cfg!(windows) {
+                String::from("external_authenticode_check_required")
+            } else {
+                String::from("os_package_signature")
+            },
             last_successful_upgrade_at: if version_changed && !rollback_detected {
                 Some(now)
             } else {
@@ -664,17 +746,21 @@ impl UpdateLifecycleState {
         channel: &str,
         now: u64,
     ) -> io::Result<Self> {
-        let previous = fs::read(path)
-            .ok()
-            .and_then(|raw| serde_json::from_slice(&raw).ok());
+        let previous = match fs::read(path) {
+            Ok(raw) => Some(serde_json::from_slice(&raw).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid agent update state: {error}"),
+                )
+            })?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
         let state = Self::reconcile(previous, current_version, desired_version, channel, now);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, serde_json::to_vec(&state)?)?;
-        set_private_file_permissions(&temp_path)?;
-        fs::rename(temp_path, path)?;
+        persist_private_json(path, &serde_json::to_vec(&state)?)?;
         Ok(state)
     }
 }
@@ -836,6 +922,11 @@ fn parse_log_level(args: &[String]) -> Option<LogLevel> {
 
 fn log_message(configured_level: LogLevel, level: LogLevel, message: &str) {
     if level.priority() >= configured_level.priority() {
+        #[cfg(windows)]
+        if windows::is_service() {
+            windows::write_log(&format!("[{}] {}", level.as_str(), message));
+            return;
+        }
         println!("[{}] {}", level.as_str(), message);
     }
 }
@@ -865,6 +956,50 @@ fn log_status_snapshot(configured_level: LogLevel, status: &ServerStatus) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if env::args().len() == 2 && env::args().nth(1).as_deref() == Some("--version") {
+        println!("Sadapp Host Agent {}", agent_version());
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let args: Vec<String> = env::args().skip(1).collect();
+        if args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "--service" | "--configure" | "--validate-config" | "--purge-state"
+            )
+        }) {
+            if args.len() != 1 {
+                return Err("Windows management commands must be used alone; credentials are entered interactively".into());
+            }
+            return match args[0].as_str() {
+                "--service" => windows::run_service(),
+                "--configure" => windows::configure(),
+                "--validate-config" => {
+                    windows::load_config()?;
+                    println!(
+                        "Protected Windows configuration is structurally valid; API authentication is checked when the service sends telemetry."
+                    );
+                    Ok(())
+                }
+                "--purge-state" => windows::purge_state(),
+                _ => unreachable!(),
+            };
+        }
+    }
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&shutdown);
+    ctrlc::set_handler(move || signal.store(true, Ordering::Release))?;
+    run_agent(None, shutdown)
+}
+
+fn run_agent(
+    windows_configuration: Option<windows_config::WindowsConfig>,
+    shutdown_requested: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(config) = &windows_configuration {
+        config.validate()?;
+    }
     let args: Vec<String> = env::args().collect();
     let invitation_link_arg = parse_invitation_link(&args);
     let invite_token_arg = parse_invite_token(&args);
@@ -873,7 +1008,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .or_else(|| env::var("API_INVITATION_LINK").ok())
         .unwrap_or_default();
 
-    let mut endpoint = parse_endpoint(&args)
+    let mut endpoint = windows_configuration
+        .as_ref()
+        .map(|config| config.endpoint.clone())
+        .or_else(|| parse_endpoint(&args))
         .or_else(|| env::var("API_ENDPOINT").ok())
         .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     if endpoint.is_empty() && !invitation_link.is_empty() {
@@ -892,13 +1030,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         .clone()
         .or_else(|| env::var("API_KEY_SECRET").ok());
 
-    let auth = AuthConfig {
+    let mut auth = AuthConfig {
         invite_token,
         key_id: non_empty(key_id),
         key_secret: non_empty(key_secret),
     };
+    if let Some(config) = &windows_configuration {
+        auth = AuthConfig {
+            invite_token: config.invite_token.clone(),
+            key_id: config.key_id.clone(),
+            key_secret: config.key_secret.clone(),
+        };
+    }
 
-    let no_send = args.iter().any(|arg| arg == "--no-send");
+    let no_send = windows_configuration.is_none() && args.iter().any(|arg| arg == "--no-send");
     let configured_log_level = parse_log_level(&args)
         .or_else(|| {
             env::var("API_LOG_LEVEL")
@@ -906,7 +1051,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .and_then(|value| parse_log_level_value(&value))
         })
         .unwrap_or(LogLevel::Info);
-    let interval_seconds = parse_interval(&args)
+    let interval_seconds = windows_configuration
+        .as_ref()
+        .map(|config| config.interval_seconds)
+        .or_else(|| parse_interval(&args))
         .or_else(|| {
             env::var("API_INTERVAL_SECONDS")
                 .ok()
@@ -926,11 +1074,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max(medium_interval_seconds);
     let queue_path = env::var("API_QUEUE_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_QUEUE_PATH));
+        .unwrap_or(default_queue_path()?);
     let update_state_path = env::var("API_UPDATE_STATE_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_UPDATE_STATE_PATH));
-    let update_channel = env::var("API_UPDATE_CHANNEL").unwrap_or_else(|_| String::from("stable"));
+        .unwrap_or(default_update_state_path()?);
+    #[cfg(windows)]
+    let (queue_path, update_state_path) = if windows::is_service() {
+        let path = windows::state_dir()?.join("state");
+        (
+            path.join("telemetry-queue.json"),
+            path.join("update-state.json"),
+        )
+    } else {
+        (queue_path, update_state_path)
+    };
+    let update_channel = env::var("API_UPDATE_CHANNEL")
+        .unwrap_or_else(|_| String::from(if cfg!(windows) { "prototype" } else { "stable" }));
     let desired_version = env::var("API_DESIRED_AGENT_VERSION")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -938,18 +1097,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_QUEUE_MAX_SAMPLES);
-    let registration_once = parse_register_once(&args)
-        .or_else(|| parse_bool_env("API_REGISTER_ONCE"))
-        .unwrap_or(false);
+    let registration_once = windows_configuration.is_none()
+        && parse_register_once(&args)
+            .or_else(|| parse_bool_env("API_REGISTER_ONCE"))
+            .unwrap_or(false);
     let configuration_health = ConfigurationHealth {
-        endpoint_source: if parse_endpoint(&args).is_some() {
+        endpoint_source: if windows_configuration.is_some() {
+            String::from("protected_config")
+        } else if parse_endpoint(&args).is_some() {
             String::from("argument")
         } else if env::var("API_ENDPOINT").is_ok() {
             String::from("environment")
         } else {
             String::from("default")
         },
-        authentication_source: if invite_token_arg.is_some()
+        authentication_source: if windows_configuration.is_some() {
+            String::from("protected_config")
+        } else if invite_token_arg.is_some()
             || invitation_link_arg.is_some()
             || key_id_arg.is_some()
             || key_secret_arg.is_some()
@@ -958,7 +1122,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             String::from("environment")
         },
-        interval_source: if parse_interval(&args).is_some() {
+        interval_source: if windows_configuration.is_some() {
+            String::from("protected_config")
+        } else if parse_interval(&args).is_some() {
             String::from("argument")
         } else if env::var("API_INTERVAL_SECONDS").is_ok() {
             String::from("environment")
@@ -975,6 +1141,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             String::from("default")
         },
+        platform: env::consts::OS,
+        execution_mode: if windows_configuration.is_some() {
+            "windows_service"
+        } else {
+            "console"
+        },
+        credential_storage: if windows_configuration.is_some() {
+            "machine_dpapi_with_windows_acl"
+        } else {
+            "external_configuration"
+        },
     };
 
     let has_auth =
@@ -986,7 +1163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             LogLevel::Error,
             "Missing API credentials. Provide an invite token or both --key-id and --key-secret. --endpoint is optional and defaults to https://sadapp.org/api/v1/agent.",
         );
-        return Ok(());
+        return Err("Missing API credentials".into());
     }
 
     if registration_once {
@@ -1080,21 +1257,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         delivery_health.queue_depth = queue.len();
         delivery_health.dropped_samples = queue.dropped_samples();
     }
-    let shutdown_requested = Arc::new(AtomicBool::new(false));
-    let shutdown_signal = Arc::clone(&shutdown_requested);
-    ctrlc::set_handler(move || {
-        shutdown_signal.store(true, Ordering::Release);
-    })?;
-
     loop {
+        #[cfg(windows)]
+        if windows::is_service() {
+            windows::check_logging()?;
+        }
         let final_cycle = shutdown_requested.load(Ordering::Acquire);
         let now = unix_timestamp();
-        if collector_due(
-            now,
-            medium_last_started_at,
-            medium_interval_seconds,
-            medium_in_flight.load(Ordering::Acquire),
-        ) {
+        if !final_cycle
+            && collector_due(
+                now,
+                medium_last_started_at,
+                medium_interval_seconds,
+                medium_in_flight.load(Ordering::Acquire),
+            )
+        {
             medium_last_started_at = Some(now);
             spawn_medium_collector(
                 Arc::clone(&collector_snapshots),
@@ -1102,12 +1279,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 medium_interval_seconds,
             );
         }
-        if collector_due(
-            now,
-            slow_last_started_at,
-            slow_interval_seconds,
-            slow_in_flight.load(Ordering::Acquire),
-        ) {
+        if !final_cycle
+            && collector_due(
+                now,
+                slow_last_started_at,
+                slow_interval_seconds,
+                slow_in_flight.load(Ordering::Acquire),
+            )
+        {
             slow_last_started_at = Some(now);
             spawn_slow_collector(
                 static_inventory.host_name.clone(),
@@ -1177,7 +1356,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &format!("Status successfully sent to {}", endpoint),
                     );
 
-                    if let Some(medium) = snapshots.medium.as_ref() {
+                    if let Some(medium) = snapshots
+                        .medium
+                        .as_ref()
+                        .filter(|_| !shutdown_requested.load(Ordering::Acquire))
+                    {
                         if medium.collected_at > last_docker_sent_at {
                             if let Some(docker) = medium.docker_metrics.as_ref() {
                                 if let Err(err) = send_docker_metrics(
@@ -1205,6 +1388,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if let Some(medium) = snapshots
                         .medium
                         .as_ref()
+                        .filter(|_| !shutdown_requested.load(Ordering::Acquire))
                         .filter(|snapshot| snapshot.collected_at > last_logs_sent_at)
                     {
                         if medium.log_events.is_empty() {
@@ -1227,7 +1411,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
 
-                    if let Some(slow) = snapshots.slow.as_ref() {
+                    if let Some(slow) = snapshots
+                        .slow
+                        .as_ref()
+                        .filter(|_| !shutdown_requested.load(Ordering::Acquire))
+                    {
                         if let Some(update_status) = slow
                             .update_status
                             .as_ref()
@@ -1237,7 +1425,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 &endpoint,
                                 &auth,
                                 &status.host_name,
-                                &update_status,
+                                update_status,
                                 configured_log_level,
                             ) {
                                 log_message(
@@ -1251,7 +1439,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
 
-                    if let Some(queued) = telemetry_queue.due_item(unix_timestamp()) {
+                    if let Some(queued) = telemetry_queue
+                        .due_item(unix_timestamp())
+                        .filter(|_| !shutdown_requested.load(Ordering::Acquire))
+                    {
                         match send_status(&endpoint, &auth, &queued.payload, configured_log_level) {
                             Ok(_) => {
                                 delivery_health.record_success(unix_timestamp());
@@ -1436,6 +1627,10 @@ fn non_empty(value: Option<String>) -> Option<String> {
 }
 
 fn render_status_screen(mode: &str, state: &str, endpoint: &str) {
+    #[cfg(windows)]
+    if windows::is_service() {
+        return;
+    }
     print!("\x1B[2J\x1B[1;1H");
     println!("sadapp");
     println!("{}", "=".repeat(40));
@@ -1480,12 +1675,12 @@ fn collect_static_inventory(
             .map(|cpu| cpu.brand().to_string())
             .unwrap_or_else(|| String::from("unknown")),
         cpu_frequency_mhz: average_cpu_frequency_mhz(sys),
-        aes_ni_enabled,
-        virtualization_hw_enabled,
+        aes_ni_enabled: (!cfg!(windows)).then_some(aes_ni_enabled),
+        virtualization_hw_enabled: (!cfg!(windows)).then_some(virtualization_hw_enabled),
         distro: sys
             .long_os_version()
             .unwrap_or_else(|| String::from("unknown")),
-        vm_type: detect_vm_type(),
+        vm_type: (!cfg!(windows)).then(detect_vm_type),
         ipv4_online: startup_network.ipv4_online,
         ipv6_online: startup_network.ipv6_online,
         ipv4_network_info: startup_network.ipv4_network_info.clone(),
@@ -1497,7 +1692,16 @@ fn collect_static_inventory(
         provider: first_non_empty_env(&["SADAPP_PROVIDER", "MONITORING_PROVIDER"]),
         owner_team: first_non_empty_env(&["SADAPP_OWNER_TEAM", "MONITORING_OWNER_TEAM"]),
         architecture: env::consts::ARCH.to_string(),
-        timezone: detect_timezone(),
+        timezone: {
+            #[cfg(windows)]
+            {
+                windows::timezone()
+            }
+            #[cfg(not(windows))]
+            {
+                Some(detect_timezone())
+            }
+        },
         machine_id: detect_machine_id(),
         agent_version: agent_version().to_string(),
     }
@@ -1659,6 +1863,9 @@ fn collect_sysfs_gpu_metrics(skip_nvidia: bool) -> Vec<GpuInfo> {
 }
 
 fn collect_gpu_metrics() -> Vec<GpuInfo> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
     let nvidia_devices = Command::new("nvidia-smi")
         .args([
             "--query-gpu=index,name,uuid,driver_version,pci.bus_id,utilization.gpu,memory.total,memory.used,temperature.gpu,power.draw,power.limit,fan.speed",
@@ -1680,6 +1887,9 @@ fn read_sysfs_u64(path: &Path) -> Option<u64> {
 }
 
 fn collect_hwmon_sensors() -> (Vec<TemperatureSensor>, Vec<FanSensor>) {
+    if cfg!(windows) {
+        return (Vec::new(), Vec::new());
+    }
     let mut temperatures = Vec::new();
     let mut fans = Vec::new();
     let Ok(entries) = fs::read_dir("/sys/class/hwmon") else {
@@ -1744,6 +1954,9 @@ fn collect_hwmon_sensors() -> (Vec<TemperatureSensor>, Vec<FanSensor>) {
 }
 
 fn collect_listening_ports() -> Vec<ListeningPort> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
     let mut ports = Vec::new();
     for (protocol, path, listening_state) in [
         ("tcp", "/proc/net/tcp", "0A"),
@@ -1787,6 +2000,10 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
     let disk_started = Instant::now();
     let mut sys = System::new_all();
     sys.refresh_all();
+    if cfg!(windows) {
+        thread::sleep(Duration::from_millis(250));
+        sys.refresh_processes();
+    }
     let disk_devices: Vec<DiskInfo> = sys
         .disks()
         .iter()
@@ -2077,11 +2294,11 @@ fn gather_status(
             .map(|snapshot| snapshot.disk_total_bytes)
             .unwrap_or(0),
         uptime_seconds: sys.uptime(),
-        load_average: LoadAverage {
+        load_average: (!cfg!(windows)).then(|| LoadAverage {
             one: round_to(sys.load_average().one as f32, 2) as f64,
             five: round_to(sys.load_average().five as f32, 2) as f64,
             fifteen: round_to(sys.load_average().fifteen as f32, 2) as f64,
-        },
+        }),
         cpu_usage_percent: round_to(cpu_usage_percent, 1),
         cpu_count,
         memory_total_bytes: sys.total_memory(),
@@ -2168,14 +2385,20 @@ mod tests {
         assert_eq!(event.timestamp, 1_790_512_235);
         assert_eq!(event.source, "systemd");
         assert_eq!(event.severity, "warn");
-        assert_eq!(event.message, "containerd.service: Found left-over process 1001445.");
+        assert_eq!(
+            event.message,
+            "containerd.service: Found left-over process 1001445."
+        );
         assert_eq!(event.unit.as_deref(), Some("containerd.service"));
         assert_eq!(event.journal_cursor.as_deref(), Some("cursor-1"));
     }
 
     #[test]
     fn journal_events_without_a_realtime_timestamp_are_ignored() {
-        assert!(parse_journal_event(r#"{"MESSAGE":"missing timestamp","SYSLOG_IDENTIFIER":"systemd"}"#).is_none());
+        assert!(
+            parse_journal_event(r#"{"MESSAGE":"missing timestamp","SYSLOG_IDENTIFIER":"systemd"}"#)
+                .is_none()
+        );
     }
 
     #[cfg(unix)]
@@ -2454,9 +2677,153 @@ mod tests {
             false,
             Some("smartctl unavailable"),
         );
-        assert_eq!(health.status, "unavailable");
-        assert_eq!(health.last_error.as_deref(), Some("smartctl unavailable"));
+        assert_eq!(
+            health.status,
+            if cfg!(windows) {
+                "unsupported"
+            } else {
+                "unavailable"
+            }
+        );
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some(if cfg!(windows) {
+                "Not supported by the Windows prototype"
+            } else {
+                "smartctl unavailable"
+            })
+        );
         assert_eq!(health.interval_seconds, 3600);
+    }
+
+    #[test]
+    fn update_state_corruption_is_not_silently_reset() {
+        let path = temp_queue_path("invalid-update-state");
+        fs::write(&path, b"invalid state").unwrap();
+        let result =
+            UpdateLifecycleState::load_and_reconcile(&path, agent_version(), None, "stable", 100);
+        assert_eq!(result.err().unwrap().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).unwrap(), b"invalid state");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn request_failures_do_not_disclose_invitation_urls_or_response_secrets() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0_u8; 8192];
+            std::io::Read::read(&mut socket, &mut buffer).unwrap();
+            socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 16\r\nConnection: close\r\n\r\nsynthetic-secret").unwrap();
+        });
+        let auth = AuthConfig {
+            invite_token: Some("synthetic-secret".into()),
+            key_id: None,
+            key_secret: None,
+        };
+        let error = send_status(
+            &format!("http://{address}/api/v1/agent"),
+            &auth,
+            &json!({}),
+            LogLevel::Error,
+        )
+        .unwrap_err()
+        .to_string();
+        server.join().unwrap();
+        assert!(error.contains("403"));
+        assert!(!error.contains("synthetic-secret"));
+        let error = send_status(
+            &format!("http://{address}/api/v1/agent"),
+            &auth,
+            &json!({}),
+            LogLevel::Error,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!error.contains("synthetic-secret"));
+        assert!(!error.contains("invite_token"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_projection_omits_unsupported_facts_and_marks_collectors() {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let network = StartupNetworkSnapshot {
+            ipv4_online: false,
+            ipv6_online: false,
+            ipv4_network_info: None,
+        };
+        let inventory = collect_static_inventory(&sys, &network);
+        let config = ConfigurationHealth {
+            endpoint_source: "protected_config".into(),
+            authentication_source: "protected_config".into(),
+            interval_source: "protected_config".into(),
+            queue_source: "default".into(),
+            update_channel_source: "default".into(),
+            platform: "windows",
+            execution_mode: "windows_service",
+            credential_storage: "machine_dpapi_with_windows_acl",
+        };
+        let update = UpdateLifecycleState::reconcile(
+            None,
+            agent_version(),
+            None,
+            "stable",
+            unix_timestamp(),
+        );
+        let medium = collect_medium_snapshot(120);
+        let slow = collect_slow_snapshot(&inventory.host_name, &update, 3600);
+        let status = gather_status(
+            &mut sys,
+            &inventory,
+            Some(&medium),
+            Some(&slow),
+            &DeliveryHealth::new(unix_timestamp()),
+            &config,
+            &update,
+            30,
+        );
+        let value = serde_json::to_value(status).unwrap();
+        for key in [
+            "load_average",
+            "aes_ni_enabled",
+            "virtualization_hw_enabled",
+            "vm_type",
+        ] {
+            assert!(
+                value.get(key).is_none(),
+                "{key} must not masquerade as a Windows measurement"
+            );
+        }
+        assert_eq!(
+            value["agent_health"]["update"]["verification_mode"],
+            "external_authenticode_check_required"
+        );
+        for name in [
+            "ports",
+            "sensors",
+            "gpu",
+            "docker",
+            "virtualization",
+            "logs",
+            "smart",
+            "packages",
+        ] {
+            let collector = value["agent_health"]["collectors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|collector| collector["name"] == name)
+                .unwrap();
+            assert_eq!(collector["status"], "unsupported", "{name}");
+        }
+        assert!(value["memory_total_bytes"].as_u64().unwrap() > 0);
+        assert!(value["cpu_count"].as_u64().unwrap() > 0);
     }
 
     #[test]
@@ -2722,6 +3089,7 @@ fn pvesh_get_json(path: &str) -> Option<Value> {
     serde_json::from_slice(&output.stdout).ok()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_proxmox_guest_rows(rows: &Value, guest_type: &str) -> Vec<VirtualGuestMetric> {
     rows.as_array()
         .into_iter()
@@ -2775,6 +3143,7 @@ fn parse_proxmox_guest_rows(rows: &Value, guest_type: &str) -> Vec<VirtualGuestM
         .collect()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn json_u64(value: Option<&Value>) -> Option<u64> {
     value.and_then(|value| {
         value
@@ -3034,6 +3403,9 @@ fn normalize_agent_endpoint(endpoint: &str) -> String {
 }
 
 fn collect_log_events(max_events: usize) -> Vec<LogEvent> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
     let mut events = collect_journal_events(max_events);
     let remaining = max_events.saturating_sub(events.len());
     if remaining > 0 {
@@ -3050,19 +3422,28 @@ fn journal_cursor_store() -> &'static Mutex<Option<String>> {
 fn parse_journal_event(line: &str) -> Option<LogEvent> {
     let entry: Value = serde_json::from_str(line).ok()?;
     let timestamp_micros = entry.get("__REALTIME_TIMESTAMP").and_then(|value| {
-        value.as_str().and_then(|text| text.parse::<u64>().ok()).or_else(|| value.as_u64())
+        value
+            .as_str()
+            .and_then(|text| text.parse::<u64>().ok())
+            .or_else(|| value.as_u64())
     })?;
     let message = entry.get("MESSAGE").and_then(Value::as_str)?.trim();
     if message.is_empty() {
         return None;
     }
-    let source = entry.get("SYSLOG_IDENTIFIER")
+    let source = entry
+        .get("SYSLOG_IDENTIFIER")
         .or_else(|| entry.get("_COMM"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .unwrap_or("systemd")
         .to_string();
-    let severity = match entry.get("PRIORITY").and_then(|value| value.as_str().and_then(|text| text.parse::<u8>().ok()).or_else(|| value.as_u64().map(|number| number as u8))) {
+    let severity = match entry.get("PRIORITY").and_then(|value| {
+        value
+            .as_str()
+            .and_then(|text| text.parse::<u8>().ok())
+            .or_else(|| value.as_u64().map(|number| number as u8))
+    }) {
         Some(0..=2) => String::from("critical"),
         Some(3) => String::from("error"),
         Some(4) => String::from("warn"),
@@ -3078,16 +3459,34 @@ fn parse_journal_event(line: &str) -> Option<LogEvent> {
         fingerprint: Some(make_fingerprint(&source, message)),
         container_id: None,
         container_name: None,
-        unit: entry.get("_SYSTEMD_UNIT").or_else(|| entry.get("UNIT")).and_then(Value::as_str).map(str::to_string),
-        journal_cursor: entry.get("__CURSOR").and_then(Value::as_str).map(str::to_string),
+        unit: entry
+            .get("_SYSTEMD_UNIT")
+            .or_else(|| entry.get("UNIT"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        journal_cursor: entry
+            .get("__CURSOR")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
 fn collect_journal_events(max_events: usize) -> Vec<LogEvent> {
-    let cursor = journal_cursor_store().lock().ok().and_then(|saved| saved.clone());
+    let cursor = journal_cursor_store()
+        .lock()
+        .ok()
+        .and_then(|saved| saved.clone());
     let event_limit = max_events.to_string();
     let mut command = Command::new("journalctl");
-    command.args(["--no-pager", "-p", "warning", "-n", event_limit.as_str(), "-o", "json"]);
+    command.args([
+        "--no-pager",
+        "-p",
+        "warning",
+        "-n",
+        event_limit.as_str(),
+        "-o",
+        "json",
+    ]);
     if let Some(cursor) = cursor.as_deref() {
         command.args(["--after-cursor", cursor]);
     }
@@ -3222,6 +3621,9 @@ fn collect_update_status(
     host_name: &str,
     lifecycle: &UpdateLifecycleState,
 ) -> Option<UpdateStatusPayload> {
+    if cfg!(windows) {
+        return None;
+    }
     let package_manager = detect_package_manager()?;
     let (pending_updates, pending_security_updates, sample_packages) =
         match package_manager.as_str() {
@@ -3347,6 +3749,10 @@ fn first_non_empty_env(keys: &[&str]) -> Option<String> {
 }
 
 fn detect_machine_id() -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows::machine_id()
+    }
     #[cfg(target_os = "linux")]
     {
         for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
@@ -3359,9 +3765,13 @@ fn detect_machine_id() -> Option<String> {
         }
     }
 
-    None
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
+#[cfg(not(windows))]
 fn detect_timezone() -> String {
     if let Ok(tz) = env::var("TZ") {
         let trimmed = tz.trim();
@@ -3486,27 +3896,24 @@ fn send_status(
     configured_log_level: LogLevel,
 ) -> Result<(), Box<dyn Error>> {
     let client = outbound_http_client()?;
-    let response = auth.apply(client.post(endpoint)).json(status).send()?;
+    let response = auth
+        .apply(client.post(endpoint))
+        .json(status)
+        .send()
+        .map_err(reqwest::Error::without_url)?;
 
     if response.status().is_success() {
-        let response_body = response.text().unwrap_or_default();
-        if !response_body.is_empty() {
-            log_message(
-                configured_log_level,
-                LogLevel::Debug,
-                &format!("API response: {}", response_body),
-            );
-        }
+        log_message(configured_log_level, LogLevel::Debug, "Heartbeat accepted");
         Ok(())
     } else {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(format!("API request failed: {} {}", status, body).into())
+        Err(format!("API request failed: {status}").into())
     }
 }
 
 fn outbound_http_client() -> Result<Client, reqwest::Error> {
     Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(OUTBOUND_HTTP_TIMEOUT_SECONDS))
         .connect_timeout(Duration::from_secs(5))
         .build()
@@ -3538,7 +3945,8 @@ fn send_docker_metrics(
     let response = auth
         .apply(client.post(docker_endpoint))
         .json(&payload)
-        .send()?;
+        .send()
+        .map_err(reqwest::Error::without_url)?;
     if response.status().is_success() {
         log_message(
             configured_log_level,
@@ -3548,13 +3956,16 @@ fn send_docker_metrics(
         Ok(())
     } else {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(format!("Docker metrics request failed: {} {}", status, body).into())
+        Err(format!("Docker metrics request failed: {status}").into())
     }
 }
 
 fn commit_journal_cursor(events: &[LogEvent]) {
-    if let Some(cursor) = events.iter().filter_map(|event| event.journal_cursor.as_deref()).last() {
+    if let Some(cursor) = events
+        .iter()
+        .filter_map(|event| event.journal_cursor.as_deref())
+        .last()
+    {
         if let Ok(mut saved) = journal_cursor_store().lock() {
             *saved = Some(cursor.to_string());
         }
@@ -3584,7 +3995,8 @@ fn send_log_events(
     let response = auth
         .apply(client.post(logs_endpoint))
         .json(&payload)
-        .send()?;
+        .send()
+        .map_err(reqwest::Error::without_url)?;
     if response.status().is_success() {
         commit_journal_cursor(events);
         log_message(
@@ -3595,8 +4007,7 @@ fn send_log_events(
         Ok(())
     } else {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(format!("Log events request failed: {} {}", status, body).into())
+        Err(format!("Log events request failed: {status}").into())
     }
 }
 
@@ -3613,7 +4024,8 @@ fn send_update_status(
     let response = auth
         .apply(client.post(updates_endpoint))
         .json(update_status)
-        .send()?;
+        .send()
+        .map_err(reqwest::Error::without_url)?;
     if response.status().is_success() {
         log_message(
             configured_log_level,
@@ -3623,7 +4035,6 @@ fn send_update_status(
         Ok(())
     } else {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(format!("Update status request failed: {} {}", status, body).into())
+        Err(format!("Update status request failed: {status}").into())
     }
 }

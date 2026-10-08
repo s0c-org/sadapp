@@ -82,11 +82,11 @@ if [[ -n "${PREBUILT_BINARY:-}" ]]; then
   MACHINE="${TARGET%%-*}"
 elif [[ -n "${TARGET}" ]]; then
   rustup target add "${TARGET}" >/dev/null
-  SADAPP_AGENT_VERSION="${AGENT_VERSION}" cargo build --release --target "${TARGET}"
+  SADAPP_AGENT_VERSION="${AGENT_VERSION}" cargo build --locked --release --target "${TARGET}"
   BINARY="target/${TARGET}/release/sadapp-host-agent"
   MACHINE="${TARGET%%-*}"
 else
-  SADAPP_AGENT_VERSION="${AGENT_VERSION}" cargo build --release
+  SADAPP_AGENT_VERSION="${AGENT_VERSION}" cargo build --locked --release
   BINARY="target/release/sadapp-host-agent"
   MACHINE="$(uname -m)"
 fi

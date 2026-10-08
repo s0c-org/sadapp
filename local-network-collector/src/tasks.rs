@@ -59,6 +59,8 @@ const OID_HR_STORAGE_ALLOC_UNITS: &str = "1.3.6.1.2.1.25.2.3.1.4";
 const OID_HR_STORAGE_SIZE: &str = "1.3.6.1.2.1.25.2.3.1.5";
 const OID_HR_STORAGE_USED: &str = "1.3.6.1.2.1.25.2.3.1.6";
 const OID_HR_STORAGE_TYPE_FIXED_DISK: &str = "1.3.6.1.2.1.25.2.1.4";
+const OID_HR_STORAGE_TYPE_RAM: &str = "1.3.6.1.2.1.25.2.1.2";
+const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
 const OID_SNMP_SYS_OBJECT_ID: &str = "1.3.6.1.2.1.1.2.0";
 const OID_SNMP_SYS_DESCR: &str = "1.3.6.1.2.1.1.1.0";
 const SNMP_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(900);
@@ -1132,27 +1134,65 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         })
         .collect::<Vec<_>>();
     let mut samples = samples;
-    if let Some((disk_used, disk_total)) =
-        poll_snmp_fixed_disk_usage(context, task, target, port, timeout_ms, retries).await
-    {
+    let host_resources =
+        poll_snmp_host_resources(context, task, target, port, timeout_ms, retries).await;
+    let has_metric = |samples: &[Value], keys: &[&str]| {
+        samples.iter().any(|sample| {
+            sample
+                .get("metricKey")
+                .and_then(Value::as_str)
+                .is_some_and(|key| keys.contains(&key))
+        })
+    };
+    let mut derived = Vec::new();
+    if let Some((disk_used, disk_total)) = host_resources.disk {
         let labels = json!({ "device": "snmp-fixed-disks" });
-        for (metric_key, value) in [
-            ("filesystem.used_bytes", disk_used),
-            ("filesystem.total_bytes", disk_total),
-        ] {
-            samples.push(json!({
-                "resource": resource,
-                "collector": collector,
-                "metricKey": metric_key,
-                "unit": "bytes",
-                "valueType": "GAUGE",
-                "labels": labels,
-                "observedAt": observed_at,
-                "value": value,
-                "quality": "GOOD",
-                "metadata": { "source": "HOST-RESOURCES-MIB" },
-            }));
+        derived.push((
+            "filesystem.used_bytes",
+            "bytes",
+            disk_used,
+            Some(labels.clone()),
+        ));
+        derived.push(("filesystem.total_bytes", "bytes", disk_total, Some(labels)));
+    }
+    if let Some((memory_used, memory_total)) = host_resources.memory {
+        if !has_metric(
+            &samples,
+            &["system.memory.used_bytes", "system.memory.available_bytes"],
+        ) {
+            derived.push(("system.memory.used_bytes", "bytes", memory_used, None));
         }
+        if !has_metric(
+            &samples,
+            &["system.memory.total_bytes", "system.memory.ucd_total_bytes"],
+        ) {
+            derived.push(("system.memory.total_bytes", "bytes", memory_total, None));
+        }
+    }
+    if let Some(cpu) = host_resources.cpu_utilization {
+        if !has_metric(
+            &samples,
+            &["system.cpu.utilization", "system.cpu.idle_percent"],
+        ) {
+            derived.push(("system.cpu.utilization", "percent", cpu, None));
+        }
+    }
+    for (metric_key, unit, value, labels) in derived {
+        let mut sample = json!({
+            "resource": resource,
+            "collector": collector,
+            "metricKey": metric_key,
+            "unit": unit,
+            "valueType": "GAUGE",
+            "observedAt": observed_at,
+            "value": value,
+            "quality": "GOOD",
+            "metadata": { "source": "HOST-RESOURCES-MIB" },
+        });
+        if let Some(labels) = labels {
+            sample["labels"] = labels;
+        }
+        samples.push(sample);
     }
     if samples.is_empty() {
         return Err(TaskError::failed(
@@ -1294,71 +1334,92 @@ fn parse_snmp_identity_probe(stdout: &[u8]) -> Result<IdentityProbe, TaskError> 
     })
 }
 
-async fn poll_snmp_fixed_disk_usage(
+#[derive(Debug, Default, PartialEq)]
+struct HostResourceUsage {
+    disk: Option<(f64, f64)>,
+    memory: Option<(f64, f64)>,
+    cpu_utilization: Option<f64>,
+}
+
+async fn poll_snmp_host_resources(
     context: &TaskContext,
     task: &TaskLease,
     target: IpAddr,
     port: u16,
     timeout_ms: u64,
     retries: u64,
-) -> Option<(f64, f64)> {
-    let (storage_types, allocation_units, sizes, used) = tokio::join!(
-        snmp_walk_values(
-            context,
-            task,
-            target,
-            port,
-            timeout_ms,
-            retries,
-            OID_HR_STORAGE_TYPE
-        ),
-        snmp_walk_values(
-            context,
-            task,
-            target,
-            port,
-            timeout_ms,
-            retries,
-            OID_HR_STORAGE_ALLOC_UNITS
-        ),
-        snmp_walk_values(
-            context,
-            task,
-            target,
-            port,
-            timeout_ms,
-            retries,
-            OID_HR_STORAGE_SIZE
-        ),
-        snmp_walk_values(
-            context,
-            task,
-            target,
-            port,
-            timeout_ms,
-            retries,
-            OID_HR_STORAGE_USED
-        ),
+) -> HostResourceUsage {
+    let walk =
+        |oid: &'static str| snmp_walk_values(context, task, target, port, timeout_ms, retries, oid);
+    let (storage_types, allocation_units, sizes, used, processor_load) = tokio::join!(
+        walk(OID_HR_STORAGE_TYPE),
+        walk(OID_HR_STORAGE_ALLOC_UNITS),
+        walk(OID_HR_STORAGE_SIZE),
+        walk(OID_HR_STORAGE_USED),
+        walk(OID_HR_PROCESSOR_LOAD),
     );
-    let (storage_types, allocation_units, sizes, used) =
-        (storage_types?, allocation_units?, sizes?, used?);
-    aggregate_fixed_disk_usage(&storage_types, &allocation_units, &sizes, &used)
+    let mut usage = HostResourceUsage {
+        cpu_utilization: processor_load.as_ref().and_then(average_processor_load),
+        ..HostResourceUsage::default()
+    };
+    if let (Some(storage_types), Some(allocation_units), Some(sizes), Some(used)) =
+        (storage_types, allocation_units, sizes, used)
+    {
+        usage.disk = aggregate_storage_usage(
+            &storage_types,
+            &allocation_units,
+            &sizes,
+            &used,
+            StorageKind::FixedDisk,
+        );
+        usage.memory = aggregate_storage_usage(
+            &storage_types,
+            &allocation_units,
+            &sizes,
+            &used,
+            StorageKind::Ram,
+        );
+    }
+    usage
 }
 
-fn aggregate_fixed_disk_usage(
+fn average_processor_load(loads: &std::collections::HashMap<u32, String>) -> Option<f64> {
+    let values = loads
+        .values()
+        .filter_map(|value| parse_snmp_number(value).ok())
+        .filter(|value| (0.0..=100.0).contains(value))
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+}
+
+#[derive(Clone, Copy)]
+enum StorageKind {
+    FixedDisk,
+    Ram,
+}
+
+impl StorageKind {
+    fn matches(self, storage_type: &str) -> bool {
+        let (name, oid) = match self {
+            Self::FixedDisk => ("hrstoragefixeddisk", OID_HR_STORAGE_TYPE_FIXED_DISK),
+            Self::Ram => ("hrstorageram", OID_HR_STORAGE_TYPE_RAM),
+        };
+        let normalized = storage_type.trim().to_ascii_lowercase();
+        normalized.ends_with(name) || normalized.ends_with(oid)
+    }
+}
+
+fn aggregate_storage_usage(
     storage_types: &std::collections::HashMap<u32, String>,
     allocation_units: &std::collections::HashMap<u32, String>,
     sizes: &std::collections::HashMap<u32, String>,
     used: &std::collections::HashMap<u32, String>,
+    kind: StorageKind,
 ) -> Option<(f64, f64)> {
-    let mut disk_used = 0.0;
-    let mut disk_total = 0.0;
+    let mut total_used = 0.0;
+    let mut total_size = 0.0;
     for (index, storage_type) in storage_types {
-        if !storage_type
-            .to_ascii_lowercase()
-            .contains("hrstoragefixeddisk")
-            && !storage_type.contains(OID_HR_STORAGE_TYPE_FIXED_DISK)
-        {
+        if !kind.matches(storage_type) {
             continue;
         }
         let (Some(unit), Some(size), Some(used_units)) = (
@@ -1376,11 +1437,11 @@ fn aggregate_fixed_disk_usage(
         if unit <= 0.0 || size < 0.0 || used_units < 0.0 {
             continue;
         }
-        disk_total += unit * size;
-        disk_used += unit * used_units;
+        total_size += unit * size;
+        total_used += unit * used_units;
     }
-    (disk_total > 0.0 && disk_used.is_finite() && disk_total.is_finite())
-        .then_some((disk_used, disk_total))
+    (total_size > 0.0 && total_used.is_finite() && total_size.is_finite())
+        .then_some((total_used, total_size))
 }
 
 async fn snmp_walk_values(
@@ -2575,8 +2636,46 @@ mod tests {
         );
 
         assert_eq!(
-            aggregate_fixed_disk_usage(&storage_type, &units, &size, &used),
+            aggregate_storage_usage(&storage_type, &units, &size, &used, StorageKind::FixedDisk),
             Some((1_024_000.0, 4_096_000.0))
+        );
+    }
+
+    #[test]
+    fn aggregates_windows_physical_memory_and_processor_load() {
+        // Captured from the Windows SNMP service (numeric output, -On).
+        let storage_type = parse_snmp_walk_values(
+            ".1.3.6.1.2.1.25.2.3.1.2.1 = OID: .1.3.6.1.2.1.25.2.1.4\n.1.3.6.1.2.1.25.2.3.1.2.6 = OID: .1.3.6.1.2.1.25.2.1.3\n.1.3.6.1.2.1.25.2.3.1.2.7 = OID: .1.3.6.1.2.1.25.2.1.2",
+            OID_HR_STORAGE_TYPE,
+        );
+        let units = parse_snmp_walk_values(
+            ".1.3.6.1.2.1.25.2.3.1.4.1 = INTEGER: 4096\n.1.3.6.1.2.1.25.2.3.1.4.6 = INTEGER: 65536\n.1.3.6.1.2.1.25.2.3.1.4.7 = INTEGER: 65536",
+            OID_HR_STORAGE_ALLOC_UNITS,
+        );
+        let size = parse_snmp_walk_values(
+            ".1.3.6.1.2.1.25.2.3.1.5.1 = INTEGER: 1000\n.1.3.6.1.2.1.25.2.3.1.5.6 = INTEGER: 771899\n.1.3.6.1.2.1.25.2.3.1.5.7 = INTEGER: 500",
+            OID_HR_STORAGE_SIZE,
+        );
+        let used = parse_snmp_walk_values(
+            ".1.3.6.1.2.1.25.2.3.1.6.1 = INTEGER: 250\n.1.3.6.1.2.1.25.2.3.1.6.6 = INTEGER: 643524\n.1.3.6.1.2.1.25.2.3.1.6.7 = INTEGER: 125",
+            OID_HR_STORAGE_USED,
+        );
+        assert_eq!(
+            aggregate_storage_usage(&storage_type, &units, &size, &used, StorageKind::Ram),
+            Some((125.0 * 65_536.0, 500.0 * 65_536.0))
+        );
+        assert_eq!(
+            aggregate_storage_usage(&storage_type, &units, &size, &used, StorageKind::FixedDisk),
+            Some((1_024_000.0, 4_096_000.0))
+        );
+        let load = parse_snmp_walk_values(
+            ".1.3.6.1.2.1.25.3.3.1.2.2 = INTEGER: 20\n.1.3.6.1.2.1.25.3.3.1.2.3 = INTEGER: 10\n.1.3.6.1.2.1.25.3.3.1.2.4 = INTEGER: 0",
+            OID_HR_PROCESSOR_LOAD,
+        );
+        assert_eq!(average_processor_load(&load), Some(10.0));
+        assert_eq!(
+            average_processor_load(&std::collections::HashMap::new()),
+            None
         );
     }
 

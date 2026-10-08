@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "profile_name": "windows-host",
+  "display_name": "Microsoft Windows",
+  "description": "Windows workstations and servers using the built-in SNMP service (HOST-RESOURCES-MIB). CPU load, physical memory and fixed disks are aggregated from hrProcessorTable and hrStorageTable.",
+  "vendor": "Microsoft",
+  "device_classes": [
+    "server",
+    "workstation"
+  ],
+  "state": "enabled",
+  "detection": {
+    "sys_object_id_prefixes": [
+      "1.3.6.1.4.1.311.1.1.3"
+    ],
+    "sys_descr_regexes": [
+      "(?i)Software: Windows",
+      "(?i)^Microsoft Windows"
+    ],
+    "required_oids": [
+      "1.3.6.1.2.1.1.2.0"
+    ],
+    "optional_oids": [
+      "1.3.6.1.2.1.25.1.1.0",
+      "1.3.6.1.2.1.25.2.2.0"
+    ],
+    "priority": 10,
+    "minimum_confidence": 0.8
+  },
+  "poll": {
+    "defaults": {
+      "timeout_ms": 1000,
+      "retries": 1,
+      "max_parallel": 4,
+      "budget_weight": 1
+    }
+  },
+  "scalars": {
+    "uptime": {
+      "oid": "1.3.6.1.2.1.1.3.0",
+      "type": "timeticks",
+      "unit": "seconds",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.uptime.seconds",
+      "required": true,
+      "priority": 100,
+      "timeout_ms": 1000
+    },
+    "host_uptime": {
+      "oid": "1.3.6.1.2.1.25.1.1.0",
+      "type": "timeticks",
+      "unit": "seconds",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.host_uptime.seconds",
+      "required": false,
+      "priority": 60,
+      "timeout_ms": 1000
+    },
+    "memory_total": {
+      "oid": "1.3.6.1.2.1.25.2.2.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.total_bytes",
+      "required": false,
+      "priority": 50,
+      "timeout_ms": 1000
+    },
+    "process_count": {
+      "oid": "1.3.6.1.2.1.25.1.6.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "system.process.count",
+      "required": false,
+      "priority": 40,
+      "timeout_ms": 1000
+    },
+    "user_sessions": {
+      "oid": "1.3.6.1.2.1.25.1.5.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "system.users.count",
+      "required": false,
+      "priority": 30,
+      "timeout_ms": 1000
+    },
+    "interfaces_count": {
+      "oid": "1.3.6.1.2.1.2.1.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "network.interface.count",
+      "required": false,
+      "priority": 40,
+      "timeout_ms": 1000
+    }
+  },
+  "tables": {},
+  "traps": []
+}

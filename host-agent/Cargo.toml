@@ -1,6 +1,6 @@
 [package]
 name = "sadapp-host-agent"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -11,3 +11,7 @@ sysinfo = "0.29"
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 ring = "0.17.14"
 ctrlc = { version = "3.4", features = ["termination"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Time", "Win32_UI_Shell"] }

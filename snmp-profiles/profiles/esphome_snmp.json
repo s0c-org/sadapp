@@ -42,8 +42,8 @@
     },
     "sys_object_id": {
       "oid": "1.3.6.1.2.1.1.2.0",
-      "type": "gauge",
-      "unit": "count",
+      "type": "string",
+      "unit": "text",
       "scale": 1,
       "transform": null,
       "metric": "sys_object_id",
@@ -64,8 +64,8 @@
     },
     "sys_contact": {
       "oid": "1.3.6.1.2.1.1.4.0",
-      "type": "gauge",
-      "unit": "count",
+      "type": "string",
+      "unit": "text",
       "scale": 1,
       "transform": null,
       "metric": "sys_contact",
@@ -86,8 +86,8 @@
     },
     "sys_location": {
       "oid": "1.3.6.1.2.1.1.6.0",
-      "type": "gauge",
-      "unit": "count",
+      "type": "string",
+      "unit": "text",
       "scale": 1,
       "transform": null,
       "metric": "sys_location",
@@ -115,7 +115,8 @@
       "metric": "hr_system_uptime",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "hr_memory_size": {
       "oid": "1.3.6.1.2.1.25.2.2.0",
@@ -126,7 +127,8 @@
       "metric": "hr_memory_size",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "wifi_rssi": {
       "oid": "1.3.9999.4.1.0",
@@ -163,8 +165,8 @@
     },
     "wifi_ip": {
       "oid": "1.3.9999.4.4.0",
-      "type": "gauge",
-      "unit": "count",
+      "type": "string",
+      "unit": "text",
       "scale": 1,
       "transform": null,
       "metric": "wifi_ip",
@@ -181,7 +183,8 @@
       "metric": "esp32_heap_size",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp32_free_heap": {
       "oid": "1.3.9999.32.2.0",
@@ -192,7 +195,8 @@
       "metric": "esp32_free_heap",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp32_min_free_heap": {
       "oid": "1.3.9999.32.3.0",
@@ -203,7 +207,8 @@
       "metric": "esp32_min_free_heap",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp32_max_allocated_heap": {
       "oid": "1.3.9999.32.4.0",
@@ -214,7 +219,8 @@
       "metric": "esp32_max_allocated_heap",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp8266_free_heap": {
       "oid": "1.3.9999.8266.1.0",
@@ -225,7 +231,8 @@
       "metric": "esp8266_free_heap",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp8266_heap_fragmentation": {
       "oid": "1.3.9999.8266.2.0",
@@ -236,7 +243,8 @@
       "metric": "esp8266_heap_fragmentation",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "esp8266_max_free_block": {
       "oid": "1.3.9999.8266.3.0",
@@ -247,7 +255,8 @@
       "metric": "esp8266_max_free_block",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "chip_type": {
       "oid": "1.3.9999.2.1.0",
@@ -269,7 +278,8 @@
       "metric": "cpu_clock",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "chip_model_or_core_version": {
       "oid": "1.3.9999.2.3.0",
@@ -291,7 +301,8 @@
       "metric": "cpu_cores",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     },
     "chip_revision": {
       "oid": "1.3.9999.2.5.0",
@@ -302,7 +313,8 @@
       "metric": "chip_revision",
       "required": false,
       "priority": 0,
-      "timeout_ms": null
+      "timeout_ms": null,
+      "optional": true
     }
   },
   "tables": {

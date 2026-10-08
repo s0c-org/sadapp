@@ -12,6 +12,8 @@ homepage: https://sadapp.org
 license: Apache-2.0
 scripts:
   postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh
 contents:
   - src: dist/.package-root/sadapp-host-agent
     dst: /usr/bin/sadapp-host-agent

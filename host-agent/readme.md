@@ -1,5 +1,37 @@
 SadApp host agent quick usage
 
+Windows x64 service/MSI prototype
+-------------------------------
+
+The Windows prototype runs under LocalService with a dedicated service SID.
+See `packaging/windows/README.md` for self-signed MSI builds, explicit certificate
+trust, native CI validation and limitations. This is not a Store/WinGet release.
+
+After MSI installation, use an elevated PowerShell console:
+
+```powershell
+& "$env:ProgramFiles\Sadapp\HostAgent\sadapp-host-agent.exe" --configure
+& "$env:ProgramFiles\Sadapp\HostAgent\sadapp-host-agent.exe" --validate-config
+Start-Service SadappHostAgent
+```
+
+Configuration prompts hide the invitation/key secret; do not put credentials in
+installer arguments. The HTTPS endpoint must not contain credentials, query or
+fragment, and certificate validation stays enabled. Machine-DPAPI configuration
+and service-specific Windows ACLs protect local enrollment.
+
+Mutable state lives under `%ProgramData%\Sadapp\HostAgent\state`; logs are bounded
+and queue replacement is atomic. Stop the service before changing configuration
+or using `--purge-state`. Upgrades and ordinary uninstall retain protected data.
+
+The Windows prototype explicitly marks ports, sensors, GPU, Docker/virtualization,
+system logs, SMART and package-update collectors unsupported. It does not publish
+Linux-only feature flags, VM type or load averages as Windows facts. Native Windows
+runtime tests are separate from a successful Linux-to-Windows cross-build.
+
+Linux/manual console usage
+--------------------------
+
 1) First registration (one run, then exits)
 Use the values from /servers/add (invitation link + key pair).
 

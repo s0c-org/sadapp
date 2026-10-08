@@ -28,4 +28,25 @@ The control plane renews leases for tasks reported as running. A result that arr
 - For worker checks: verify the assigned location is covered by an active worker.
 - For LAN tasks: verify the LNC is active and the resource address remains inside its allowed CIDR.
 
+After an audited forced Agent re-enrollment, reporting remains interrupted until a server administrator retrieves the new invitation from **Server settings → Access** and re-runs the Host Agent installer on that machine. Never share the invitation token with staff or include it in a support request.
+
 When contacting support, include timestamps, task IDs, sanitized error messages, and version numbers. Never include community strings, passphrases, invitation tokens, or private key material.
+
+For a staff investigation, include the response's `x-sadapp-request-id` header. Staff with an active, audited tenant debug session can search this ID in Admin V2 → Tenant inventory → tenant details → **API errors by request ID**. Only errors attributed to that tenant are returned, and IP addresses, email addresses, and credential-like values are redacted. Error records are retained for 14 days.
+
+## Support and community feedback
+
+Open **Support & feedback** from navigation. Use a private ticket for account-specific
+investigations and select Monitoring, Notifications, Account, or Status pages. Include the
+assigned resource name, timestamp, expected behavior, version, and Request ID where
+available. Do not include credentials or invitation tokens.
+
+Bug reports can be kept private or explicitly shared with the community. Feature
+suggestions and their discussions are public to signed-in community members; comments
+do not display account identity. Ticket messages remain private to the requester and
+authorized support staff.
+
+If a section or discussion cannot load, its error/reload action lets you retry without
+recreating the request. Failed comments and ticket replies retain entered text. **Export
+support data** exports only support records; use **Settings → Security → Your data** for
+the full account export or deletion workflow.

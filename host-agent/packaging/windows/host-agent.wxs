@@ -1,0 +1,45 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Sadapp Host Agent"
+    Manufacturer="Sadapp"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="6d645758-87e4-4a3a-bb14-809a32d67fd1"
+    Scope="perMachine"
+    InstallerVersion="500"
+    Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Sadapp Host Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="HostAgent" Title="Sadapp Host Agent" Level="1">
+      <ComponentRef Id="HostAgentService" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SadappFolder" Name="Sadapp">
+        <Directory Id="INSTALLFOLDER" Name="HostAgent">
+          <Component Id="HostAgentService" Guid="e20b49ef-fb12-4c14-87b0-616651a8ca0f">
+            <File Id="HostAgentExecutable" Source="$(var.AgentExe)" KeyPath="yes" />
+            <ServiceInstall
+              Id="HostAgentServiceInstall"
+              Name="SadappHostAgent"
+              DisplayName="Sadapp Host Agent"
+              Description="Collects and sends host telemetry to the configured Sadapp endpoint."
+              Type="ownProcess"
+              Start="auto"
+              ErrorControl="normal"
+              Account="NT AUTHORITY\LocalService"
+              Arguments="--service">
+              <ServiceConfig OnInstall="yes" OnReinstall="yes" DelayedAutoStart="yes" ServiceSid="unrestricted" />
+            </ServiceInstall>
+            <ServiceControl
+              Id="HostAgentServiceControl"
+              Name="SadappHostAgent"
+              Stop="both"
+              Remove="uninstall"
+              Wait="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>
