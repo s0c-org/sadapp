@@ -441,6 +441,9 @@ struct GpuInfo {
     power_draw_watts: Option<f32>,
     power_limit_watts: Option<f32>,
     fan_speed_percent: Option<f32>,
+    core_clock_mhz: Option<f32>,
+    memory_clock_mhz: Option<f32>,
+    hotspot_temperature_celsius: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -1740,8 +1743,8 @@ fn parse_nvidia_smi_csv(output: &str) -> Vec<GpuInfo> {
     output
         .lines()
         .filter_map(|line| {
-            let fields: Vec<&str> = line.splitn(12, ',').map(str::trim).collect();
-            if fields.len() != 12 || fields[0].is_empty() || fields[1].is_empty() {
+            let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+            if ![12, 14].contains(&fields.len()) || fields[0].is_empty() || fields[1].is_empty() {
                 return None;
             }
             let mib_to_bytes = |value: &str| {
@@ -1762,6 +1765,9 @@ fn parse_nvidia_smi_csv(output: &str) -> Vec<GpuInfo> {
                 power_draw_watts: parse_optional_f32(fields[9]),
                 power_limit_watts: parse_optional_f32(fields[10]),
                 fan_speed_percent: parse_optional_f32(fields[11]),
+                core_clock_mhz: fields.get(12).and_then(|value| parse_optional_f32(value)),
+                memory_clock_mhz: fields.get(13).and_then(|value| parse_optional_f32(value)),
+                hotspot_temperature_celsius: None,
             })
         })
         .collect()
@@ -1787,6 +1793,78 @@ fn first_hwmon_value(device_path: &Path, file_name: &str, divisor: f32) -> Optio
         .ok()?
         .filter_map(Result::ok)
         .find_map(|entry| read_scaled_f32(entry.path().join(file_name), divisor))
+}
+
+fn active_dpm_clock(device_path: &Path, name: &str) -> Option<f32> {
+    read_trimmed(device_path.join(name))?
+        .lines()
+        .find(|line| line.trim_end().ends_with('*'))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| parse_optional_f32(value.trim_end_matches("Mhz").trim_end_matches("MHz")))
+}
+
+fn gpu_command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = match Command::new("timeout")
+        .args(["8s", program])
+        .args(args)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("GPU collector could not execute {program}: {error}");
+            return None;
+        }
+    };
+    // Optional vendor tools are not installed on every host.
+    if output.status.code() == Some(127) {
+        return None;
+    }
+    if !output.status.success() || output.stdout.len() > 1024 * 1024 {
+        eprintln!(
+            "GPU collector {program} failed or exceeded its output limit (status {})",
+            output.status
+        );
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn amd_metric_number(value: &Value) -> Option<f32> {
+    let value = value.get("value").unwrap_or(value);
+    value
+        .as_f64()
+        .map(|number| number as f32)
+        .or_else(|| value.as_str().and_then(parse_optional_f32))
+        .filter(|number| number.is_finite() && *number >= 0.0)
+}
+
+fn apply_amd_smi_metrics(gpu: &mut GpuInfo, output: &str) -> Result<(), serde_json::Error> {
+    let parsed: Value = serde_json::from_str(output)?;
+    let row = parsed
+        .as_array()
+        .and_then(|rows| rows.first())
+        .unwrap_or(&parsed);
+    let row = row.get("values").unwrap_or(row);
+    let number = |path: &str| row.pointer(path).and_then(amd_metric_number);
+    gpu.utilization_percent = number("/usage/gfx_activity").or(gpu.utilization_percent);
+    gpu.temperature_celsius = number("/temperature/edge").or(gpu.temperature_celsius);
+    gpu.hotspot_temperature_celsius =
+        number("/temperature/hotspot").or(gpu.hotspot_temperature_celsius);
+    gpu.power_draw_watts = number("/power/socket_power").or(gpu.power_draw_watts);
+    gpu.core_clock_mhz = number("/clock/gfx_0/clk")
+        .or_else(|| number("/clock/gfx/clk"))
+        .or(gpu.core_clock_mhz);
+    gpu.memory_clock_mhz = number("/clock/mem_0/clk")
+        .or_else(|| number("/clock/mem/clk"))
+        .or(gpu.memory_clock_mhz);
+    // AMD SMI labels these as MB, but its CLI converts bytes using 1024 * 1024.
+    gpu.memory_total_bytes = number("/mem_usage/total_vram")
+        .map(|mib| (mib as f64 * 1048576.0) as u64)
+        .or(gpu.memory_total_bytes);
+    gpu.memory_used_bytes = number("/mem_usage/used_vram")
+        .map(|mib| (mib as f64 * 1048576.0) as u64)
+        .or(gpu.memory_used_bytes);
+    Ok(())
 }
 
 fn collect_sysfs_gpu_metrics_from(drm_root: &Path, skip_nvidia: bool) -> Vec<GpuInfo> {
@@ -1852,6 +1930,12 @@ fn collect_sysfs_gpu_metrics_from(drm_root: &Path, skip_nvidia: bool) -> Vec<Gpu
             power_draw_watts,
             power_limit_watts,
             fan_speed_percent,
+            core_clock_mhz: first_hwmon_value(&device_path, "freq1_input", 1_000_000.0)
+                .or_else(|| active_dpm_clock(&device_path, "pp_dpm_sclk"))
+                .or_else(|| read_scaled_f32(entry.path().join("gt_cur_freq_mhz"), 1.0)),
+            memory_clock_mhz: first_hwmon_value(&device_path, "freq2_input", 1_000_000.0)
+                .or_else(|| active_dpm_clock(&device_path, "pp_dpm_mclk")),
+            hotspot_temperature_celsius: first_hwmon_value(&device_path, "temp2_input", 1000.0),
         });
     }
 
@@ -1866,17 +1950,38 @@ fn collect_gpu_metrics() -> Vec<GpuInfo> {
     if cfg!(windows) {
         return Vec::new();
     }
-    let nvidia_devices = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=index,name,uuid,driver_version,pci.bus_id,utilization.gpu,memory.total,memory.used,temperature.gpu,power.draw,power.limit,fan.speed",
-            "--format=csv,noheader,nounits",
-        ])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| parse_nvidia_smi_csv(&String::from_utf8_lossy(&output.stdout)))
-        .unwrap_or_default();
+    let base_query = "--query-gpu=index,name,uuid,driver_version,pci.bus_id,utilization.gpu,memory.total,memory.used,temperature.gpu,power.draw,power.limit,fan.speed";
+    let clock_query = format!("{base_query},clocks.current.graphics,clocks.current.memory");
+    let nvidia_devices = gpu_command_output(
+        "nvidia-smi",
+        &[&clock_query, "--format=csv,noheader,nounits"],
+    )
+    .or_else(|| gpu_command_output("nvidia-smi", &[base_query, "--format=csv,noheader,nounits"]))
+    .map(|output| parse_nvidia_smi_csv(&output))
+    .unwrap_or_default();
     let mut devices = collect_sysfs_gpu_metrics(!nvidia_devices.is_empty());
+    for gpu in devices.iter_mut().filter(|gpu| gpu.vendor == "AMD") {
+        if let Some(bdf) = &gpu.pci_bus_id {
+            if let Some(output) = gpu_command_output(
+                "amd-smi",
+                &[
+                    "metric",
+                    "--gpu",
+                    bdf,
+                    "--usage",
+                    "--power",
+                    "--clock",
+                    "--temperature",
+                    "--mem-usage",
+                    "--json",
+                ],
+            ) {
+                if let Err(error) = apply_amd_smi_metrics(gpu, &output) {
+                    eprintln!("GPU collector could not parse amd-smi metrics: {error}");
+                }
+            }
+        }
+    }
     devices.extend(nvidia_devices);
     devices.sort_by(|left, right| left.id.cmp(&right.id));
     devices
@@ -2870,6 +2975,57 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].fan_speed_percent, None);
         assert_eq!(devices[0].memory_used_bytes, Some(0));
+    }
+
+    #[test]
+    fn parses_nvidia_clocks_and_amd_unit_wrappers() {
+        let mut gpu = parse_nvidia_smi_csv(
+            "0, RTX 4090, GPU-abc, 580.12, 00000000:01:00.0, 37, 24564, 8192, 61, 188.5, 450, 42, 2520, 10501\n",
+        ).remove(0);
+        assert_eq!(gpu.core_clock_mhz, Some(2520.0));
+        assert_eq!(gpu.memory_clock_mhz, Some(10501.0));
+        let output = r#"[{"gpu":0,"usage":{"gfx_activity":{"value":0,"unit":"%"}},"temperature":{"edge":{"value":52,"unit":"C"},"hotspot":{"value":64,"unit":"C"}},"power":{"socket_power":{"value":180.5,"unit":"W"}},"clock":{"gfx_0":{"clk":{"value":2200,"unit":"MHz"}},"mem_0":{"clk":"N/A"}},"mem_usage":{"total_vram":{"value":16384,"unit":"MB"},"used_vram":{"value":1024,"unit":"MB"}}}]"#;
+        apply_amd_smi_metrics(&mut gpu, output).unwrap();
+        assert_eq!(gpu.utilization_percent, Some(0.0));
+        assert_eq!(gpu.core_clock_mhz, Some(2200.0));
+        assert_eq!(gpu.memory_clock_mhz, Some(10501.0));
+        assert_eq!(gpu.temperature_celsius, Some(52.0));
+        assert_eq!(gpu.hotspot_temperature_celsius, Some(64.0));
+        assert_eq!(gpu.power_draw_watts, Some(180.5));
+        assert_eq!(gpu.memory_total_bytes, Some(16384 * 1048576));
+        assert_eq!(gpu.memory_used_bytes, Some(1024 * 1048576));
+        assert!(apply_amd_smi_metrics(&mut gpu, "not json").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_amd_sysfs_clocks_and_deduplicates_drm_nodes() {
+        use std::os::unix::fs::symlink;
+        let root = env::temp_dir().join(format!("sadapp-amd-gpu-test-{}", std::process::id()));
+        let device = root.join("0000:03:00.0");
+        let drm = root.join("drm");
+        fs::create_dir_all(device.join("hwmon/hwmon0")).unwrap();
+        for node in ["card0", "renderD128"] {
+            fs::create_dir_all(drm.join(node)).unwrap();
+            symlink(&device, drm.join(node).join("device")).unwrap();
+        }
+        for (file, value) in [
+            ("vendor", "0x1002"),
+            ("device", "0x744c"),
+            ("gpu_busy_percent", "75"),
+            ("pp_dpm_sclk", "0: 500Mhz\n1: 2400Mhz *"),
+            ("pp_dpm_mclk", "0: 96Mhz\n1: 1000Mhz *"),
+            ("hwmon/hwmon0/temp1_input", "55000"),
+            ("hwmon/hwmon0/temp2_input", "72000"),
+        ] {
+            fs::write(device.join(file), value).unwrap();
+        }
+        let devices = collect_sysfs_gpu_metrics_from(&drm, false);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].core_clock_mhz, Some(2400.0));
+        assert_eq!(devices[0].memory_clock_mhz, Some(1000.0));
+        assert_eq!(devices[0].hotspot_temperature_celsius, Some(72.0));
     }
 
     #[cfg(unix)]

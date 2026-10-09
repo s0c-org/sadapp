@@ -83,9 +83,17 @@ Docker inventory is read through the Docker Engine API over `DOCKER_HOST` (Unix 
 
 GPU telemetry supports multiple devices and reports identity, driver, PCI address, utilization,
 dedicated memory, temperature, power, and fan speed when the installed driver exposes them. NVIDIA
-metrics use the driver-provided `nvidia-smi` command. AMD and Intel metrics use Linux DRM/sysfs, so
-no vendor SDK is required. Unsupported measurements remain absent rather than being reported as
+metrics use the driver-provided `nvidia-smi` command, including core and memory clocks. AMD
+metrics optionally use `amd-smi metric --json` (install AMD SMI separately); Linux DRM/sysfs
+remains the fallback for AMD and Intel, including exposed active clocks and hotspot temperature.
+Vendor commands are read-only and time-bounded; no clocks, fans or power limits are changed.
+Unsupported measurements remain absent rather than being reported as
 zero, and hosts without a supported GPU report an empty device list.
+Server and Hardware detail pages show per-GPU utilization, VRAM, temperature, clocks,
+power and fan history. Unified history preserves GPU identity labels. GPU samples follow
+the medium collector interval (120 seconds by default; set the environment value above
+to 30 for finer sampling). These are driver measurements, not game FPS or frame times.
+Windows GPU collection remains unsupported by the Windows prototype.
 
 Stable and canary updates use the operating system package manager. APT Release/Packages metadata
 and RPM packages/repository metadata are signed, so artifact verification remains in the native
