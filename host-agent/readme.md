@@ -24,7 +24,7 @@ Mutable state lives under `%ProgramData%\Sadapp\HostAgent\state`; logs are bound
 and queue replacement is atomic. Stop the service before changing configuration
 or using `--purge-state`. Upgrades and ordinary uninstall retain protected data.
 
-The Windows prototype explicitly marks ports, sensors, GPU, Docker/virtualization,
+The Windows prototype explicitly marks ports, sensors, Docker/virtualization,
 system logs, SMART and package-update collectors unsupported. It does not publish
 Linux-only feature flags, VM type or load averages as Windows facts. Native Windows
 runtime tests are separate from a successful Linux-to-Windows cross-build.
@@ -93,7 +93,11 @@ Server and Hardware detail pages show per-GPU utilization, VRAM, temperature, cl
 power and fan history. Unified history preserves GPU identity labels. GPU samples follow
 the medium collector interval (120 seconds by default; set the environment value above
 to 30 for finer sampling). These are driver measurements, not game FPS or frame times.
-Windows GPU collection remains unsupported by the Windows prototype.
+Windows agent 0.2.9 adds NVIDIA `nvidia-smi.exe` and AMD Radeon driver-native ADL
+readouts (no Windows AMD SMI installation needed). Queries use trusted system
+paths and an eight-second deadline; unsupported driver sensors stay unavailable.
+Intel GPU telemetry on Windows is not yet supported. GPU collector status is
+shown in the UI even when no readings are available.
 
 Stable and canary updates use the operating system package manager. APT Release/Packages metadata
 and RPM packages/repository metadata are signed, so artifact verification remains in the native

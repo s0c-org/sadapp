@@ -97,12 +97,24 @@ uninstall.
 ## Capability and trust limits
 
 The Windows prototype reports unsupported status for its unimplemented
-optional collectors: ports, sensors, GPU, Docker, virtualization, host logs,
+optional collectors: ports, sensors, Docker, virtualization, host logs,
 SMART, and package inventory. It omits load and feature booleans and VM type
 rather than presenting those unsupported facts as collected data. The Windows
 binary does not make a runtime Authenticode assertion; reports that require
 this check identify it as `external_authenticode_check_required`. The build
 workflow separately verifies the prototype executable and MSI signatures.
+
+Version 0.2.9 adds NVIDIA GPU telemetry through the driver-provided
+`nvidia-smi.exe` and AMD Radeon telemetry through the driver's System32
+`atiadlxx.dll` ADL API. No separate AMD SMI installation is required on Windows.
+Driver-dependent readings include utilization, edge/hotspot temperatures,
+core/memory clocks, VRAM, power and fan percentage. Missing sensors remain
+unavailable, not zero; Intel Windows GPU telemetry is not yet supported.
+Queries are read-only and isolated with an eight-second deadline. The service
+does not search the working directory or a user-controlled PATH for tools/DLLs.
+Hardware and Server detail pages automatically show reported GPU gauges and
+history, or explain collector unavailability. MSI upgrades preserve enrollment;
+use `Install-HostAgent.ps1` without `--configure` or `--purge-state`.
 
 ## Enroll and start
 

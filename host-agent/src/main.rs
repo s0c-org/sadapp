@@ -8,7 +8,6 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
-#[cfg(unix)]
 use std::io::Read;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -16,6 +15,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(any(windows, test))]
+use std::process::Stdio;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,8 @@ use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, PidExt, ProcessExt, Syst
 #[cfg(windows)]
 mod windows;
 mod windows_config;
+#[cfg(windows)]
+mod windows_gpu;
 
 const DEFAULT_ENDPOINT: &str = "https://sadapp.org/api/v1/agent";
 #[cfg(not(windows))]
@@ -134,14 +137,7 @@ impl CollectorHealth {
         if cfg!(windows)
             && matches!(
                 name,
-                "ports"
-                    | "sensors"
-                    | "gpu"
-                    | "docker"
-                    | "virtualization"
-                    | "logs"
-                    | "smart"
-                    | "packages"
+                "ports" | "sensors" | "docker" | "virtualization" | "logs" | "smart" | "packages"
             )
         {
             return Self::unsupported(
@@ -427,7 +423,7 @@ struct ListeningPort {
     port: u16,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct GpuInfo {
     id: String,
     name: String,
@@ -959,6 +955,11 @@ fn log_status_snapshot(configured_level: LogLevel, status: &ServerStatus) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    if env::args().len() == 2 && env::args().nth(1).as_deref() == Some("--gpu-probe-amd") {
+        println!("{}", serde_json::to_string(&windows_gpu::collect_amd()?)?);
+        return Ok(());
+    }
     if env::args().len() == 2 && env::args().nth(1).as_deref() == Some("--version") {
         println!("Sadapp Host Agent {}", agent_version());
         return Ok(());
@@ -1829,6 +1830,81 @@ fn gpu_command_output(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+#[cfg(any(windows, test))]
+fn bounded_gpu_output(command: &mut Command) -> Result<String, Box<dyn Error>> {
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command.spawn()?;
+    let stdout = child.stdout.take().ok_or("GPU stdout unavailable")?;
+    let stderr = child.stderr.take().ok_or("GPU stderr unavailable")?;
+    let output_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let error_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(8) {
+            child.kill()?;
+            child.wait()?;
+            return Err("GPU query exceeded eight-second deadline".into());
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    let output = output_reader
+        .join()
+        .map_err(|_| "GPU stdout reader failed")??;
+    let errors = error_reader
+        .join()
+        .map_err(|_| "GPU stderr reader failed")??;
+    if output.len() > 1024 * 1024 {
+        return Err("GPU output exceeded size limit".into());
+    }
+    if !status.success() {
+        return Err(format!(
+            "GPU query failed ({status}): {}",
+            String::from_utf8_lossy(&errors)
+                .chars()
+                .take(500)
+                .collect::<String>()
+        )
+        .into());
+    }
+    if !errors.is_empty() {
+        let message = format!(
+            "GPU driver warning: {}",
+            String::from_utf8_lossy(&errors)
+                .chars()
+                .take(500)
+                .collect::<String>()
+        );
+        #[cfg(windows)]
+        windows_gpu::warn(&message);
+        #[cfg(not(windows))]
+        eprintln!("{message}");
+    }
+    Ok(String::from_utf8(output)?)
+}
+
 fn amd_metric_number(value: &Value) -> Option<f32> {
     let value = value.get("value").unwrap_or(value);
     value
@@ -1947,9 +2023,14 @@ fn collect_sysfs_gpu_metrics(skip_nvidia: bool) -> Vec<GpuInfo> {
 }
 
 fn collect_gpu_metrics() -> Vec<GpuInfo> {
-    if cfg!(windows) {
-        return Vec::new();
-    }
+    #[cfg(windows)]
+    return windows_gpu::collect();
+    #[cfg(not(windows))]
+    collect_linux_gpu_metrics()
+}
+
+#[cfg(not(windows))]
+fn collect_linux_gpu_metrics() -> Vec<GpuInfo> {
     let base_query = "--query-gpu=index,name,uuid,driver_version,pci.bus_id,utilization.gpu,memory.total,memory.used,temperature.gpu,power.draw,power.limit,fan.speed";
     let clock_query = format!("{base_query},clocks.current.graphics,clocks.current.memory");
     let nvidia_devices = gpu_command_output(
@@ -2165,7 +2246,15 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
         CollectorHealth::completed("sensors", sensors_started, interval_seconds, true, None);
     let gpu_started = Instant::now();
     let gpu_devices = collect_gpu_metrics();
-    let gpu_health = CollectorHealth::completed("gpu", gpu_started, interval_seconds, true, None);
+    let gpu_health = CollectorHealth::completed(
+        "gpu",
+        gpu_started,
+        interval_seconds,
+        !cfg!(windows) || !gpu_devices.is_empty(),
+        Some(
+            "No supported GPU readings. NVIDIA requires nvidia-smi; AMD requires its driver telemetry API on Windows or DRM/sysfs on Linux. Check agent logs for driver/query errors.",
+        ),
+    );
     let docker_started = Instant::now();
     let docker_metrics = collect_docker_metrics();
     let docker_health = CollectorHealth::completed(
@@ -2471,6 +2560,58 @@ fn gather_status(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bounded_gpu_query_reads_both_streams_and_reports_failures() {
+        #[cfg(windows)]
+        let mut command = Command::new("cmd.exe");
+        #[cfg(windows)]
+        command.args(["/C", "echo gpu-output & echo driver-warning 1>&2"]);
+        #[cfg(not(windows))]
+        let mut command = Command::new("/bin/sh");
+        #[cfg(not(windows))]
+        command.args(["-c", "printf gpu-output; printf driver-warning >&2"]);
+        assert!(
+            bounded_gpu_output(&mut command)
+                .unwrap()
+                .contains("gpu-output")
+        );
+        #[cfg(windows)]
+        let mut failure = Command::new("cmd.exe");
+        #[cfg(windows)]
+        failure.args(["/C", "echo driver-failed 1>&2 & exit /b 3"]);
+        #[cfg(not(windows))]
+        let mut failure = Command::new("/bin/sh");
+        #[cfg(not(windows))]
+        failure.args(["-c", "printf driver-failed >&2; exit 3"]);
+        assert!(
+            bounded_gpu_output(&mut failure)
+                .unwrap_err()
+                .to_string()
+                .contains("driver-failed")
+        );
+    }
+
+    #[test]
+    fn bounded_gpu_query_terminates_hung_driver_process() {
+        #[cfg(windows)]
+        let mut command = Command::new("powershell.exe");
+        #[cfg(windows)]
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        #[cfg(not(windows))]
+        let mut command = Command::new("/bin/sleep");
+        #[cfg(not(windows))]
+        command.arg("30");
+        let started = Instant::now();
+        let error = bounded_gpu_output(&mut command).unwrap_err().to_string();
+        assert!(error.contains("eight-second deadline"));
+        assert!(started.elapsed() >= Duration::from_secs(8));
+        assert!(started.elapsed() < Duration::from_secs(15));
+    }
     use super::*;
 
     fn temp_queue_path(name: &str) -> PathBuf {
@@ -2928,7 +3069,6 @@ mod tests {
         for name in [
             "ports",
             "sensors",
-            "gpu",
             "docker",
             "virtualization",
             "logs",
@@ -2943,6 +3083,13 @@ mod tests {
                 .unwrap();
             assert_eq!(collector["status"], "unsupported", "{name}");
         }
+        let gpu = value["agent_health"]["collectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|collector| collector["name"] == "gpu")
+            .unwrap();
+        assert_ne!(gpu["status"], "unsupported");
         assert!(value["memory_total_bytes"].as_u64().unwrap() > 0);
         assert!(value["cpu_count"].as_u64().unwrap() > 0);
     }
