@@ -50,3 +50,32 @@ If a section or discussion cannot load, its error/reload action lets you retry w
 recreating the request. Failed comments and ticket replies retain entered text. **Export
 support data** exports only support records; use **Settings → Security → Your data** for
 the full account export or deletion workflow.
+
+### Support conversations
+
+The support workspace separates existing conversations from **New support ticket**.
+Search by subject and filter by status; **Needs your response** counts tickets waiting
+for you across all pages. Hiding the new-ticket form preserves its draft on the current
+page. Drafts are not saved across navigation or browser reloads.
+
+- **Waiting for support**: support needs to review your request or latest reply.
+- **Waiting for your reply**: staff have replied and need your response.
+- **Resolved**: replying reopens the request for support.
+- **Closed**: the conversation is read-only; create a new ticket and include the old
+  ticket reference if you need further assistance.
+
+Lists show 25 tickets per page; conversations show the latest 50 messages, with
+**Older messages** and **Newer messages** controls. Internal staff notes are excluded
+from customer conversations and message counts. The center and latest conversation
+refresh every 20 seconds while visible, without clearing drafts or failed-action errors.
+Older conversation pages refresh manually so reading is not interrupted.
+
+Staff can filter the inbox to unassigned tickets needing support or tickets waiting for
+customers, refresh conversations, and add public replies or clearly marked internal
+notes. Single-ticket triage changes and their audit records are committed together.
+The displayed ticket-age triage target is not a contractual or measured response-time
+SLA. Staff updates to closed tickets do not automatically reopen them.
+
+Messages accept up to 20,000 characters and ticket subjects up to 200. Do not include
+credentials. Attachments, unread tracking, email delivery, and measured response-time
+targets are not available in this core rollout.
