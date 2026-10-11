@@ -26,6 +26,41 @@ Profiles marked **Experimental** can be selected manually, but are not considere
 
 Open a collector's activity to inspect recent tasks. A failed discovery can be retried from its task row; retry creates a new task using the saved scan parameters and checks the collector's current CIDR policy.
 
+## Collector workspace and live queues
+
+Search the settings workspace by collector name, site, location or subnet. Each
+card shows its private-network coverage; use **Manage** for policy and detailed
+activity, or **Review in Discovery** for findings scoped to that collector.
+Registration is a separate disclosure with a one-time, 15-minute enrollment token.
+
+Live snapshots refresh every 15 seconds while the tab is visible, including the
+open collector's tasks, telemetry receipts and configuration revision. The update
+time is shown; pause updates when needed or use manual refresh. Failed refreshes
+retain the last data and expose **Retry refresh**. Action errors stay visible until
+dismissed or another action is attempted; background refresh does not hide them.
+
+- **Pending tasks** counts server-side work, including future schedules and the
+  shared site pool. Capabilities and CIDR policy still determine eligibility.
+  Shared tasks appear for multiple collectors and must not be summed.
+- **Leased tasks** counts claimed tasks, including expired leases awaiting recovery.
+  Task details show lease expiry and future scheduling.
+- **Running / capacity** and **Buffered uploads** come from the last heartbeat.
+  Buffered uploads are results awaiting delivery, not the pending task queue.
+
+Policy drafts survive live updates. Closing or switching with edits requires
+confirmation; Save and Discard are explicit. Saving changes the desired revision:
+the collector must acknowledge it on a subsequent heartbeat before it is synced.
+If the policy changes elsewhere while editing, discard and reload before saving;
+settings writes also check the expected revision to avoid overwriting newer policy.
+Private/local CIDRs are validated by the server, and invalid scan ports can be
+corrected without losing the draft.
+
+**Drain** allows existing leases to finish without claiming new work. **Disable**
+prevents new leases and requires confirmation; existing work may still finish.
+**Delete** requires confirmation and removes credentials and active leases while
+retaining discovery audit history. Demo accounts can inspect and refresh but
+cannot change policy, register, retry, approve or delete.
+
 ## Logs and health
 
 ```bash

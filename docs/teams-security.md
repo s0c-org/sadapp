@@ -6,7 +6,30 @@ Sadapp separates account ownership, team membership, and server membership. Give
 
 Server access roles are Owner, Admin, Editor, and Viewer. Owners control transfer and deletion; Admins manage configuration and access; Editors change operational settings; Viewers can inspect information without changing it. Team access can grant members access to multiple owned resources.
 
-Use **Settings → Teams & access** to manage teams and **Server settings → Access** for a device's members and Agent credentials. Removing a person or revoking a credential takes effect independently of whether an Agent process is still running.
+Use **Settings → Workspace & access → Teams** to manage teams, **Server access** for account-wide access administration, and **Server settings → Access** for a device's members and Agent credentials. Removing a person or revoking a credential takes effect independently of whether an Agent process is still running.
+
+## Settings workspace
+
+The Settings home groups destinations into Account, Workspace & access, Monitoring,
+and Alerting & communication. Search matches names, descriptions and related terms
+(for example, "SNMP collector"). The account summary keeps email verification,
+multi-factor status, connected sign-in methods and profile editing together.
+Account identity is separate from the explicitly published Public profile.
+
+Each settings page has a breadcrumb back to Settings, related section links and a
+cross-group destination selector. Notification pages keep their own Overview,
+Gateways, Routing, Messages, History and Preferences navigation. Legacy profile
+and status-page URLs retain their redirects.
+
+Agent registrations separate Awaiting agent, Expired and Completed enrollment
+links. Active links are hidden until revealed; copying, renewal and revocation
+report their results. Revocation requires confirmation and does not remove an
+already connected device. Renewal returns the link to use next.
+
+Maintenance uses local browser time, validates a positive duration of at most
+7 days and asks for confirmation before cancellation. Cancelled maintenance
+resumes alerting unless another applicable window remains active. Demo accounts
+show a read-only explanation.
 
 ## Account security
 

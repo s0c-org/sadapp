@@ -17,6 +17,23 @@ Monitor history reports success rate and failures separately from successful-che
 
 Use **Discovery** (`/discovery`) to review unconfigured Local Network Collector findings. Pending candidates record an address, detected service/device kind, and limited evidence such as an open port; approving one adds it to the local inventory. These findings do not imply CPU, memory, or disk telemetry.
 
+Discovery separates Awaiting review, Ready for setup, Managed networks and Ignored
+findings. Search and collector/site filtering preserve the origin of each finding;
+collector coverage shows the actual configured CIDRs. Counts describe findings,
+not confirmed physical devices, and capped lists explicitly report incomplete results.
+
+One managed server may have LAN, Wi-Fi and additional NIC addresses. Explicitly
+link local findings to the same existing host instead of creating duplicate servers.
+Confirm the host and site when associating a secondary address; it must fall within
+the collector's allowed private networks. Linking leaves the primary IP and monitoring
+settings unchanged. Interface labels can be edited and links detached without deleting
+the local resource or checks. Managed networks groups services by collector/address
+under the linked server, not by hostname or private IP alone.
+
+Agent-reported NIC names are suggestions, not verified address mappings. Collector
+multicast listening interfaces are also distinct from the discovered device's NICs.
+Ignore applies to one collector/address, not every network of the same host.
+
 Approved LAN resources that have not yet been adopted stay in Discovery. Adopt a TCP service by enabling a recurring check; it then appears in Software. Link discovered hardware with Agent or SNMP to add it to Hardware. Paused or unconfigured LAN resources remain in Discovery, and adopted resources retain their `LAN` marker and available source tags.
 
 Open a resource name for its detail page. TCP services have a saved port setting and a **Run TCP check** action. Hardware resources can be linked to a managed Server through **Set up Agent** or **Set up SNMP**; the existing resource is linked rather than duplicated. Agent setup requires installing the Agent on the host. SNMP setup requires valid device credentials.
