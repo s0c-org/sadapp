@@ -12,6 +12,24 @@ The Local Network Collector (LNC) is an outbound-only service for approved priva
 
 The `siteKey` groups tasks for collector routing. It is distinct from a Monitoring Worker location.
 
+### Package availability on localized systems
+
+The installer reads APT package policy in the C locale so the candidate check works
+regardless of the system language. Older installers may incorrectly report
+`No Local Network Collector package is published` on German-language systems,
+where APT prints `Installationskandidat:` instead of `Candidate:`.
+Download the updated installer, or run it with `LC_ALL=C` set on the installer
+process. To check availability independently:
+
+```bash
+sudo env LC_ALL=C apt-cache policy sadapp-local-network-collector
+```
+
+If this still shows `Candidate: (none)`, the selected repository channel has no
+installable candidate for that machine; do not bypass the package check.
+This check runs before enrollment, so this error does not consume the token.
+Enrollment tokens expire after 15 minutes; obtain a fresh token if needed.
+
 ## Discovery and checks
 
 Discovery probes only explicitly selected ports within allowed private CIDRs. For responsive addresses, the collector also makes a best-effort reverse-DNS lookup; a hostname appears when the local resolver has a PTR record. Missing PTR data does not block discovery, and the IP remains the stable address. It creates candidates; approval or configured auto-add turns a candidate into an inventory resource. A discovered `tcp_service` represents reachability evidence, not a fully monitored host.

@@ -59,7 +59,7 @@ if command -v apt-get >/dev/null 2>&1; then
   printf 'deb [signed-by=/usr/share/keyrings/sadapp-archive-keyring.gpg] %s %s main\n' "$DEB_REPOSITORY_URL" "$channel" > /etc/apt/sources.list.d/sadapp.list
   apt-get update
   architecture="$(dpkg --print-architecture)"
-  candidate="$(apt-cache policy sadapp-local-network-collector | awk '/Candidate:/ { print $2; exit }')"
+  candidate="$(LC_ALL=C apt-cache policy sadapp-local-network-collector | awk '/Candidate:/ { print $2; exit }')"
   [[ -n "$candidate" && "$candidate" != '(none)' ]] || fail "No Local Network Collector package is published for $architecture in the $channel repository."
   DEBIAN_FRONTEND=noninteractive apt-get install -y sadapp-local-network-collector
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
