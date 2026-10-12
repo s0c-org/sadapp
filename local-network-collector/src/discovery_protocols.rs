@@ -106,7 +106,10 @@ fn safe_text(value: &str, limit: usize) -> String {
 }
 
 fn hash_identity(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn parse_ssdp_response(packet: &[u8]) -> Option<(Value, Option<Value>)> {

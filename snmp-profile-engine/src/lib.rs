@@ -105,7 +105,10 @@ pub fn detection_bundle_checksum(
     profiles: &[DetectionProfile],
 ) -> Result<String, serde_json::Error> {
     let serialized = serde_json::to_vec(profiles)?;
-    Ok(format!("{:x}", Sha256::digest(serialized)))
+    Ok(Sha256::digest(serialized)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 pub fn metric_capability_group(metric: &str) -> &'static str {
@@ -383,7 +386,12 @@ mod tests {
     #[test]
     fn auto_selects_experimental_profile_with_vendor_prefix_and_description() {
         let profiles = [
-            profile("generic-host", ProfileState::Enabled, "1.3.6.1.2.1", "(?i)^$"),
+            profile(
+                "generic-host",
+                ProfileState::Enabled,
+                "1.3.6.1.2.1",
+                "(?i)^$",
+            ),
             profile(
                 "linux-net-snmp",
                 ProfileState::Enabled,

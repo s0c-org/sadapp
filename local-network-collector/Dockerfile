@@ -1,4 +1,4 @@
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 WORKDIR /build
 COPY local-network-collector/Cargo.toml local-network-collector/Cargo.lock ./local-network-collector/
 COPY local-network-collector/src ./local-network-collector/src

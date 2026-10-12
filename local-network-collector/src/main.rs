@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::RngExt;
 use sadapp_local_network_collector::{
     api::ApiClient,
     config::{Config, MAX_HEARTBEAT_SECONDS, MIN_HEARTBEAT_SECONDS},
@@ -19,7 +19,7 @@ use sadapp_local_network_collector::{
     spool::Spool,
     tasks::{self, TaskContext, TokioCommandExecutor},
 };
-use sysinfo::{CpuExt, DiskExt, System, SystemExt};
+use sysinfo::{Disk, Disks, System};
 use tokio::{
     sync::{RwLock, Semaphore},
     task::JoinSet,
@@ -77,24 +77,23 @@ fn collect_resource_usage(
     system: &mut System,
     state_dir: &Path,
 ) -> sadapp_local_network_collector::model::CollectorResourceUsage {
-    system.refresh_cpu();
+    system.refresh_cpu_all();
     system.refresh_memory();
-    system.refresh_disks();
+    let disks = Disks::new_with_refreshed_list();
 
     let state_path = state_dir
         .canonicalize()
         .unwrap_or_else(|_| state_dir.to_path_buf());
-    let state_disk = system
-        .disks()
+    let state_disk = disks
         .iter()
         .filter(|disk| state_path.starts_with(disk.mount_point()))
         .max_by_key(|disk| disk.mount_point().components().count());
-    let disk_total_bytes = state_disk.map(DiskExt::total_space);
+    let disk_total_bytes = state_disk.map(Disk::total_space);
     let disk_used_bytes =
         state_disk.map(|disk| disk.total_space().saturating_sub(disk.available_space()));
 
     sadapp_local_network_collector::model::CollectorResourceUsage {
-        cpu_percent: system.global_cpu_info().cpu_usage().clamp(0.0, 100.0),
+        cpu_percent: system.global_cpu_usage().clamp(0.0, 100.0),
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
         disk_mount: state_disk.map(|disk| disk.mount_point().to_string_lossy().into_owned()),
@@ -302,7 +301,7 @@ async fn main() -> Result<()> {
                 interval
             }
         };
-        let jitter = rand::thread_rng().gen_range(0.9..=1.1);
+        let jitter = rand::rng().random_range(0.9..=1.1);
         tokio::select! {
             _ = sleep(next_interval.mul_f64(jitter)) => {},
             // When the last claim filled every free slot, more work is likely queued:

@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
 
 #[cfg(windows)]
 mod windows;
@@ -1665,14 +1665,10 @@ fn collect_static_inventory(
 ) -> StaticInventory {
     let (aes_ni_enabled, virtualization_hw_enabled) = cpu_feature_flags();
     StaticInventory {
-        host_name: sys.host_name().unwrap_or_else(|| String::from("unknown")),
-        os_name: sys.name().unwrap_or_else(|| String::from("unknown")),
-        os_version: sys
-            .long_os_version()
-            .unwrap_or_else(|| String::from("unknown")),
-        kernel_version: sys
-            .kernel_version()
-            .unwrap_or_else(|| String::from("unknown")),
+        host_name: System::host_name().unwrap_or_else(|| String::from("unknown")),
+        os_name: System::name().unwrap_or_else(|| String::from("unknown")),
+        os_version: System::long_os_version().unwrap_or_else(|| String::from("unknown")),
+        kernel_version: System::kernel_version().unwrap_or_else(|| String::from("unknown")),
         processor: sys
             .cpus()
             .first()
@@ -1681,9 +1677,7 @@ fn collect_static_inventory(
         cpu_frequency_mhz: average_cpu_frequency_mhz(sys),
         aes_ni_enabled: (!cfg!(windows)).then_some(aes_ni_enabled),
         virtualization_hw_enabled: (!cfg!(windows)).then_some(virtualization_hw_enabled),
-        distro: sys
-            .long_os_version()
-            .unwrap_or_else(|| String::from("unknown")),
+        distro: System::long_os_version().unwrap_or_else(|| String::from("unknown")),
         vm_type: (!cfg!(windows)).then(detect_vm_type),
         ipv4_online: startup_network.ipv4_online,
         ipv6_online: startup_network.ipv6_online,
@@ -2188,24 +2182,22 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
     sys.refresh_all();
     if cfg!(windows) {
         thread::sleep(Duration::from_millis(250));
-        sys.refresh_processes();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
     }
-    let disk_devices: Vec<DiskInfo> = sys
-        .disks()
+    let disk_devices: Vec<DiskInfo> = Disks::new_with_refreshed_list()
         .iter()
         .map(|disk| DiskInfo {
             name: disk.name().to_string_lossy().into_owned(),
             mount_point: disk.mount_point().to_string_lossy().into_owned(),
             total_bytes: disk.total_space(),
             available_bytes: disk.available_space(),
-            file_system: String::from_utf8_lossy(disk.file_system()).into_owned(),
+            file_system: disk.file_system().to_string_lossy().into_owned(),
         })
         .collect();
     let disk_health =
         CollectorHealth::completed("disk", disk_started, interval_seconds, true, None);
     let network_started = Instant::now();
-    let network_interfaces = sys
-        .networks()
+    let network_interfaces = Networks::new_with_refreshed_list()
         .iter()
         .map(
             |(name, data): (&String, &sysinfo::NetworkData)| NetworkInterface {
@@ -2222,7 +2214,7 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
         .processes()
         .values()
         .map(|process| ProcessInfo {
-            name: process.name().to_string(),
+            name: process.name().to_string_lossy().into_owned(),
             cpu_usage_percent: round_to(process.cpu_usage(), 1),
             memory_bytes: process.memory(),
         })
@@ -2436,12 +2428,12 @@ fn gather_status(
     interval_seconds: u64,
 ) -> ServerStatus {
     let heartbeat_started = Instant::now();
-    sys.refresh_cpu();
+    sys.refresh_cpu_all();
     sys.refresh_memory();
-    sys.refresh_processes();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
 
     let cpu_count = sys.cpus().len();
-    let cpu_usage_percent = sys.global_cpu_info().cpu_usage();
+    let cpu_usage_percent = sys.global_cpu_usage();
     let agent_runtime = sys
         .process(sysinfo::Pid::from_u32(std::process::id()))
         .map(|process| {
@@ -2487,11 +2479,11 @@ fn gather_status(
         disk_total_bytes: medium
             .map(|snapshot| snapshot.disk_total_bytes)
             .unwrap_or(0),
-        uptime_seconds: sys.uptime(),
+        uptime_seconds: System::uptime(),
         load_average: (!cfg!(windows)).then(|| LoadAverage {
-            one: round_to(sys.load_average().one as f32, 2) as f64,
-            five: round_to(sys.load_average().five as f32, 2) as f64,
-            fifteen: round_to(sys.load_average().fifteen as f32, 2) as f64,
+            one: round_to(System::load_average().one as f32, 2) as f64,
+            five: round_to(System::load_average().five as f32, 2) as f64,
+            fifteen: round_to(System::load_average().fifteen as f32, 2) as f64,
         }),
         cpu_usage_percent: round_to(cpu_usage_percent, 1),
         cpu_count,
