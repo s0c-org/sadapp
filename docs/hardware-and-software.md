@@ -11,6 +11,14 @@ Server **Physical location** is a free-form inventory note. **Map region** is se
 
 **Monitoring Worker Location** controls Worker-routed checks; it is not a physical location. ICMP, TCP and HTTP(S) monitors can use any active Local Network Collector owned by the server owner that advertises the required capability and allows the target network. Prior discovery or a linked local resource is not required for these checks. SNMP additionally requires a linked resource and verified SNMP credentials. DNS and TLS checks remain Worker-routed. A private IP requires an authorized local executor.
 
+When changing an external target to an internal IP in Hardware or Software settings,
+collector choices follow the new target's subnet, not the previously saved host IP.
+The editor selects a matching local executor when available; the target and collector
+can be saved together. A collector outside that subnet or without the required
+capability is not offered.
+In Hardware settings, **Configure a local check** uses the newly entered
+preferred address and preselects an eligible collector.
+
 Monitor history reports success rate and failures separately from successful-check latency percentiles. P95 requires at least 20 latency samples; P99 requires at least 1,000. A low percentile does not mean a target is reachable if the failure rate is high.
 
 ## Discovered resources
