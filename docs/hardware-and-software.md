@@ -89,5 +89,8 @@ The hardware resource detail page shows its source, last-seen time, recent telem
 - **Information** for address, location, environment, and ownership metadata.
 
 Collection changes apply to future polls; they cannot create historical measurements.
+Disabled SNMP does not produce stale-reading or failed-poll warnings, even when
+old readings and collector records remain. Its source is shown as Inactive and
+SNMP setup is available again; retained historical readings remain visible.
 
 Owners can permanently remove unlinked local resources from their detail page, including active recurring checks; this also deletes their telemetry and check history. Removing a previously deleted managed-host record also removes software resources still linked to the same local collector and exact address. Deleting a managed Server removes all inventory resources and history linked to that Server. These removals cannot be undone.

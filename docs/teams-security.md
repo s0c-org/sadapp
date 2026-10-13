@@ -8,6 +8,19 @@ Server access roles are Owner, Admin, Editor, and Viewer. Owners control transfe
 
 Use **Settings → Workspace & access → Teams** to manage teams, **Server access** for account-wide access administration, and **Server settings → Access** for a device's members and Agent credentials. Removing a person or revoking a credential takes effect independently of whether an Agent process is still running.
 
+Team owners and admins can use **Teams → Shared resources → Add server** to grant
+Viewer, Editor or Admin access to a server they own or administer. This shares
+the host and its linked workloads and checks with every team member without
+changing ownership, billing or quotas. Selecting an already shared server updates
+its grant. Use **Hardware settings → Access → Team access** to select recipient
+teams, update grants or remove access; only active teams you own or administer
+are eligible.
+
+The separate **Hardware settings → Info → Workspace** selector moves an owned
+server between personal and team billing workspaces. This changes the plan,
+quotas and retention that apply; it is not a team-access grant. Team-loading
+failures are displayed with a retry action rather than hiding the selector.
+
 ## Settings workspace
 
 The Settings home groups destinations into Account, Workspace & access, Monitoring,
