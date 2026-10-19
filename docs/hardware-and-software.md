@@ -143,6 +143,25 @@ Editors can schedule a test, pause/resume, delete individual checks, and duplica
 
 **Waiting** means that no result has confirmed monitoring coverage, not a confirmed outage or a successful check. If it persists beyond the configured interval, verify executor availability and use **Test now**. Local TCP checks retain their recurring schedule when linked to a host.
 
+Latest check health refreshes every 30 seconds while the page is visible,
+including Settings and grouped service views. Refreshing observations preserves
+unsaved check configuration and worker-routing drafts; it does not save them.
+
+Public Monitoring Worker checks with stale results (three intervals, minimum five
+minutes) can be claimed by another healthy registered worker, even outside the preferred
+region. Active leases still prevent simultaneous execution. Private collector
+checks never enter this fallback pool. Checks that have never returned a result
+become eligible five minutes after their scheduled run.
+
+A failed public check requests an independent worker observation before declaring
+an outage. Until three consecutive failures and failures from at least two distinct
+workers within the last three intervals (minimum five minutes) are available, the
+result is a warning awaiting confirmation, not an outage alert. The original
+failed outcome and executor remain visible. A successful alternate observation
+clears the failure streak. Without another eligible worker, confirmation remains
+pending rather than asserting an outage. Regional routing is a preference for these
+public checks, not an isolation guarantee.
+
 The worker region selector is shown directly below **Executor** in check settings.
 It still controls routing for every Monitoring Worker check on the linked host,
 not a per-check region. **Save worker location** saves routing independently of
