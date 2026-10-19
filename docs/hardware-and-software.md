@@ -5,6 +5,21 @@ The two registers answer different questions:
 - **Hardware** (`/hardware`) lists managed hosts and devices that can provide machine telemetry.
 - **Software** (`/software`) lists services, websites, and configured reachability checks grouped by host. Containers and virtual machines belong in Hardware.
 
+Host identity, Agent/SNMP credentials, access, shared alert policies and host maintenance
+are available at `/hosts/[routeKey]/settings`, including for software-only hosts.
+Software owns check creation, protocol configuration, testing, pause/delete and
+Required/Advisory roles. Use **Add check** to open
+`/software/new?host=[routeKey]`; see [Adding a check](software-add-check.md).
+Shared host settings link back to Software and to SNMP trap history.
+
+The former `/servers` interface no longer renders a separate fleet or settings
+workspace. Its index redirects to Hardware, add redirects to onboarding, and host
+links redirect through an access-checked destination resolver to canonical Hardware
+or Software. Hosts without a canonical resource retain their telemetry detail view
+under `/hosts/[routeKey]`. Bookmarked settings/trap links and query parameters remain
+supported; old Checks tabs open Software and selected monitors are verified against
+the authorized host before redirecting. Server APIs and database entities are unchanged.
+
 ## Location and check execution
 
 Server **Physical location** is a free-form inventory note. **Map region** is selected separately; choose a country, subdivision, and city for a precise pin on your private fleet map. The public map remains at coarse regional resolution. Unselected or unrecognized locations are listed as not mapped rather than guessed from their text.
@@ -46,22 +61,93 @@ Approved LAN resources that have not yet been adopted stay in Discovery. Adopt a
 
 Open a resource name for its detail page. TCP services have a saved port setting and a **Run TCP check** action. Hardware resources can be linked to a managed Server through **Set up Agent** or **Set up SNMP**; the existing resource is linked rather than duplicated. Agent setup requires installing the Agent on the host. SNMP setup requires valid device credentials.
 
+Local TCP check settings also allow editing the target private IP within the assigned
+collector's allowed CIDRs. Saving updates the service address, recurring check and
+queued verification together; it does not change the linked host address or sibling
+services. In service Settings, choose **Configure** for the individual check. Owners
+can use its **Delete check** action even when the local Software resource is linked
+to a host. This removes only that service and its history, leaving the host and other
+checks intact; associated discovery findings are ignored.
+
 ## Resource detail and settings
 
 ### Software service workspace
 
 Opening a grouped Software row goes to `/software/[id]?view=service`, showing the related checks rather than an arbitrary single check. Grouping follows the same host identity rules as the inventory: linked server first, then route identity, then an unambiguous normalized host address. Shared addresses belonging to multiple managed hosts are not merged automatically. Each child link opens its individual check.
 
-- **Overview** shows the service/check state, latest observation, response time, executor, and protocol results. Service Overview graphs show the selected check; History includes all service checks.
-- **Checks** provides mobile-friendly cards with targets, protocols, schedules, warnings, HTTP status, errors, and direct Results/Configure links.
-- **History** has a shared one-hour, 24-hour, or seven-day window, separate latency and outcome graphs, endpoint reading trends, local check requests, and expandable results with safe protocol details and execution source. At most 500 representative observations per series are shown; these sampled results are not an uptime SLA. Missing latency does not hide a failed outcome. Heavy history is fetched when needed, not with every 30-second detail refresh.
+- **Overview** shows the actual check count, latest observation, executor, and protocol results. Service timings are listed separately by check and protocol rather than substituting the newest ICMP, TLS, or HTTP measurement into one response-time figure. These are total check durations, not separately measured connection or handshake phases. Service Overview and History graphs include all service checks. Non-healthy checks are named explicitly without changing the existing aggregate health policy.
+- **Checks** provides mobile-friendly cards with targets, protocols, executors, schedules, warnings, HTTP status, errors, and direct Results/Configure links.
+- **History** has a shared one-hour, 24-hour, or seven-day window, separate latency and outcome graphs, endpoint reading trends, local check requests, and expandable results with safe protocol details and execution source. At most 500 representative observations per series are shown; these sampled results are not an uptime SLA. Missing latency does not hide a failed outcome. Visible history refreshes after every four active 30-second detail polls, rather than on every poll. Manual refresh and range changes also reload it.
 - **Settings** (`/software/[id]/settings`) edits the selected check. Website settings include expected HTTP status and TLS verification; DNS includes expected addresses; TLS/website checks include certificate warning days. Executor choices include the server owner's active collectors, independent of the saved host IP. Change the target, select Local network collector and a collector covering the new address, then save together. Collector options show their allowed CIDRs; the API validates ownership, capabilities and networks. Primary checks still update their shared host settings.
+
+Both service and check Settings now expose editable controls inline instead of a
+navigation-only policy panel. The selected check's configuration appears directly
+on service Settings; Configure opens the editor for another check.
+**Monitoring Worker Location** uses the configured worker coverage values (for
+example `eu_central`) and has a separate **Save worker location** action. This is
+shared host routing for every Worker check on that host, not a per-check override;
+it does not change physical placement or Local Network Collector execution.
+**Host alerts** switches the existing shared notification policy on/off while
+preserving its gateway and thresholds. Gateway management stays account-wide.
+Inline **Maintenance** schedules or cancels windows for the linked host or one of
+its Monitor checks, with explicit scope; individual check pages default to that
+check, while grouped service pages default to the entire host. Team-wide windows
+remain in workspace settings. Windows do not pause execution or rewrite recorded
+outcomes. Viewers cannot change these controls.
+
+Editors with a linked host can use **Add check** to open the host's check creation
+form. Identity, credentials and access remain in shared host settings. Unlinked
+local resources do not offer host controls; unified local TCP checks currently do
+not have individual maintenance-window support. The linked host name in the
+summary opens its host settings.
+
+Supported monitor protocols and local collector capabilities are defined in
+`lib/monitorProtocols.ts`, shared by the check API and both settings editors.
+DNS and TLS remain worker-only. Unknown or future protocol names do not inherit
+HTTP collector support. REST readings retain their separate endpoint workflow;
+adding a protocol still requires its validation, executor, configuration and safe
+result presentation, not just an entry in this catalog.
+
+Check editors explain what the existing executors actually measure: ICMP
+reachability, TCP connection establishment, TLS validation without HTTP or
+STARTTLS, and HTTP GET/status checks. DNS is an IP address lookup through the
+Worker's system resolver, not a configurable record-type/custom-resolver monitor.
+All expected IPs must be present; additional answers are allowed. An empty
+expectation accepts any non-empty address result. Both creation and editing
+validate expected addresses as IP addresses. The schedule interval is not an
+executor timeout setting.
+
+Recorded protocol details use a shared explicit label/field allowlist. SNMP
+summaries include finite, non-negative numeric CPU, memory, load, uptime,
+processor-core and interface readings when reported. Labels identify percentages,
+bytes and seconds. Missing readings are not filled with zero. Credentials, raw
+device objects and unrecognized fields are not displayed.
 
 States distinguish **Healthy**, **Warning**, **Failed**, **Waiting**, **Paused**, and **Stale**. A result becomes stale after three configured intervals with a minimum of five minutes. Paused checks never use old successful results as proof of current health. Warning results, such as filtered ICMP, do not imply a confirmed outage.
 
+Configured monitor check settings include a **Service health role**:
+**Required** (the default for every existing check) or **Advisory**. Only Required
+checks contribute to the grouped service health badge in both the Software
+inventory and service workspace. Advisory checks retain their actual individual
+status, results, timing and history, including failures and warnings. A service
+with only Advisory checks is **Waiting**, not Healthy, and its overview explains
+that no Required checks are configured. Paused Required checks remain paused;
+Advisory successes cannot make them Healthy. Unconfigured resources still report
+missing monitoring coverage. This setting does not change execution, alert
+delivery, maintenance, or availability calculations. Duplicate check configuration
+retains the saved role. Local discovered checks without this setting remain Required.
+
 Each check's latency and outcome charts share a full-width section: side by side on desktop, stacked on phones. Outcome charts use discrete Failed / Warning / Passed ticks and unfilled steps, not a continuous filled measurement. A single check card fills its available row.
 
-Editors can schedule a test, pause/resume, and duplicate saved check configuration without history or primary-host identity. “Check scheduled” only means queued, not passed. Viewer access remains read-only. Primary checks share target, enable state, and HTTP options with their host and cannot be deleted independently. Instead, the host owner can use **Delete service and host** in the check settings and type the host name to confirm. This permanently removes the host, all of its checks, and their history. Other members can only pause the check.
+Editors can schedule a test, pause/resume, delete individual checks, and duplicate saved check configuration without history or primary-host identity. “Check scheduled” only means queued, not passed. Viewer access remains read-only. Primary checks share target, enable state, and HTTP options with their host, but can be deleted independently after typing the check name. Deletion removes only that check and its history, cancels its outstanding collector tasks, and disables its mirrored host protocol schedule. The host and sibling checks remain; shared SNMP polling stays enabled when an enabled sibling requires it. Host saves do not recreate the deleted primary check. Use **Add check** in Software to create a replacement. Whole-host deletion remains in shared host settings.
+
+**Waiting** means that no result has confirmed monitoring coverage, not a confirmed outage or a successful check. If it persists beyond the configured interval, verify executor availability and use **Test now**. Local TCP checks retain their recurring schedule when linked to a host.
+
+The worker region selector is shown directly below **Executor** in check settings.
+It still controls routing for every Monitoring Worker check on the linked host,
+not a per-check region. **Save worker location** saves routing independently of
+**Save check**, and does not submit unfinished protocol fields. Local Network
+Collector checks continue to use their selected collector, not this region.
 
 Unsaved edits have a floating Save/Discard bar and navigation confirmation. TCP services support both recurring reachability checks and separate REST readings; switching between them protects drafts. REST credentials remain in the vault and existing references are retained when fields are left blank. Failed endpoint saves retain a newly created reference for retry rather than creating duplicate credentials. Existing REST method, body credential references, and additional mappings are preserved.
 

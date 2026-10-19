@@ -1,6 +1,6 @@
 # Getting started
 
-Sadapp separates managed devices from the services and checks that run against them. Begin at **Onboard Device** (`/servers/add`) when you want to add an Agent, SNMP device, ping target, or website. Use **Local Network Collectors** (`/settings/local-network-collectors`) when checks must originate inside a private network.
+Sadapp separates managed devices from the services and checks that run against them. Begin at **Onboard Device** (`/onboarding`) when you want to add an Agent, SNMP device, ping target, or website. Use **Local Network Collectors** (`/settings/local-network-collectors`) when checks must originate inside a private network.
 
 ## Choose a collection path
 
