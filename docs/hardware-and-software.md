@@ -20,6 +20,12 @@ under `/hosts/[routeKey]`. Bookmarked settings/trap links and query parameters r
 supported; old Checks tabs open Software and selected monitors are verified against
 the authorized host before redirecting. Server APIs and database entities are unchanged.
 
+Fleet Overview uses the latest relevant check observation for the activity timestamp
+and ordering of website- and ping-only hosts. A host that has never been observed
+shows **never**, not its creation date. Hardware activity still reflects machine
+telemetry. An accurate timestamp does not make a delayed check fresh: stale-check
+thresholds and availability evidence requirements are unchanged.
+
 ## Location and check execution
 
 Server **Physical location** is a free-form inventory note. **Map region** is selected separately; choose a country, subdivision, and city for a precise pin on your private fleet map. The public map remains at coarse regional resolution. Unselected or unrecognized locations are listed as not mapped rather than guessed from their text.
