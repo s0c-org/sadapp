@@ -5,12 +5,35 @@ The two registers answer different questions:
 - **Hardware** (`/hardware`) lists managed hosts and devices that can provide machine telemetry.
 - **Software** (`/software`) lists services, websites, and configured reachability checks grouped by host. Containers and virtual machines belong in Hardware.
 
+Linked hardware devices remain visible while Agent, SNMP or Prometheus telemetry
+is being set up, even before a collector record or first reading exists. Missing
+readings stay unknown; visibility does not imply the device is healthy.
+Unadopted local discoveries and hosts configured only for ping or website checks
+remain excluded from Hardware unless they have a hardware telemetry collector.
+
+Hardware shows one row per explicitly linked managed host, combining its
+discovered network interfaces and telemetry sources before pagination. The row
+uses the managed host's name and newest observations. Expand **Linked interfaces
+and telemetry** to open the individual resources and see their preserved IP
+addresses and interface labels. Containers and virtual machines remain separate.
+Matching names or private IPs alone do not merge different managed host identities.
+
 Host identity, Agent/SNMP credentials, access, shared alert policies and host maintenance
 are available at `/hosts/[routeKey]/settings`, including for software-only hosts.
 Software owns check creation, protocol configuration, testing, pause/delete and
 Required/Advisory roles. Use **Add check** to open
-`/software/new?host=[routeKey]`; see [Adding a check](software-add-check.md).
+`/onboarding?flow=check&host=[routeKey]`; service links also carry their context.
+Global Add check can create a new software-only service or select an existing host.
+See [Adding a check](software-add-check.md).
 Shared host settings link back to Software and to SNMP trap history.
+
+In the Software workspace, Overview contains readings and recent performance.
+Checks contains the service monitoring summary, protocol timings and check cards.
+History contains the filterable recorded-results log without graphs. Settings
+at service level contains shared routing, alerts and maintenance only.
+Use Configure from Checks for individual protocol settings, duplication and
+deletion. Graphs appear only on Overview. **Add check** is available
+in the page actions on every tab for editable, host-linked services.
 
 The former `/servers` interface no longer renders a separate fleet or settings
 workspace. Its index redirects to Hardware, add redirects to onboarding, and host
@@ -130,6 +153,15 @@ The path is a field in the JSON response, not the endpoint URL. Metric keys use
 lowercase letters, numbers, dots, underscores and hyphens; display names allow
 spaces and capitals. Reading cards and charts show the display name when configured.
 
+To create a reading for an existing host, open **Add check**, select
+**REST (JSON readings)**, and choose an active Local Network Collector reporting
+the `rest` capability. Enter a read-only HTTP(S) GET URL, the numeric JSON field
+path and its display name. Private IP targets must fall inside the collector's
+allowed CIDRs. Polling intervals start at 60 seconds. Creation saves a separate
+Software entry attached to that host and queues endpoint verification; recurring
+polling starts only after successful verification. Authentication can be configured
+in the saved reading's Settings. JSON numeric strings are not converted to numbers.
+
 Opening a grouped Software row goes to `/software/[id]?view=service`, showing the related checks rather than an arbitrary single check. Grouping follows the same host identity rules as the inventory: linked server first, then route identity, then an unambiguous normalized host address. Shared addresses belonging to multiple managed hosts are not merged automatically. Each child link opens its individual check.
 
 - **Overview** shows the actual check count, latest observation, executor, and protocol results. Service timings are listed separately by check and protocol rather than substituting the newest ICMP, TLS, or HTTP measurement into one response-time figure. These are total check durations, not separately measured connection or handshake phases. Service Overview and History graphs include all service checks. Non-healthy checks are named explicitly without changing the existing aggregate health policy.
@@ -161,7 +193,7 @@ summary opens its host settings.
 Supported monitor protocols and local collector capabilities are defined in
 `lib/monitorProtocols.ts`, shared by the check API and both settings editors.
 DNS and TLS remain worker-only. Unknown or future protocol names do not inherit
-HTTP collector support. REST readings retain their separate endpoint workflow;
+HTTP collector support. REST is available in Add check but retains its separate endpoint workflow;
 adding a protocol still requires its validation, executor, configuration and safe
 result presentation, not just an entry in this catalog.
 

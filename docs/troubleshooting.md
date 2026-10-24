@@ -34,6 +34,15 @@ When contacting support, include timestamps, task IDs, sanitized error messages,
 
 For a staff investigation, include the response's `x-sadapp-request-id` header. Staff with an active, audited tenant debug session can search this ID in Admin V2 → Tenant inventory → tenant details → **API errors by request ID**. Only errors attributed to that tenant are returned, and IP addresses, email addresses, and credential-like values are redacted. Error records are retained for 14 days.
 
+Platform administrators can also open a customer view from that same debug
+session. This uses the selected workspace owner's normal read/write permissions
+across their personal and team workspaces, with the same reason and expiry.
+Staff-access history in **Settings → Security** records when this view is opened
+and exited. Account security changes, full-account exports and account deletion
+are unavailable in customer view; staff administration remains inaccessible.
+An administrator sees a persistent identity/expiry banner and **Exit customer
+view**, including after the debug session expires or is revoked.
+
 ## Support and community feedback
 
 Open **Support & feedback** from navigation. Use a private ticket for account-specific
