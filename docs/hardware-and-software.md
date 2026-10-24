@@ -25,6 +25,9 @@ and ordering of website- and ping-only hosts. A host that has never been observe
 shows **never**, not its creation date. Hardware activity still reflects machine
 telemetry. An accurate timestamp does not make a delayed check fresh: stale-check
 thresholds and availability evidence requirements are unchanged.
+Website- and ping-only entries omit CPU/memory values in Fleet activity.
+Needs attention labels them **Website checks** or **Ping checks** alongside the
+observation age, rather than treating missing machine metrics as zero pressure.
 
 ## Location and check execution
 
