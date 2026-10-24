@@ -24,6 +24,26 @@ the authorized host before redirecting. Server APIs and database entities are un
 
 Server **Physical location** is a free-form inventory note. **Map region** is selected separately; choose a country, subdivision, and city for a precise pin on your private fleet map. The public map remains at coarse regional resolution. Unselected or unrecognized locations are listed as not mapped rather than guessed from their text.
 
+Fleet maps keep route animation enabled by default, using one shared loop capped at
+24 frames per second. Moving markers pause when the map is off-screen, the tab is
+hidden, or reduced motion is enabled in your device settings. Turn off **Animate
+routes** to retain route lines, statuses, zoom and details without moving markers.
+Country outlines are rendered separately from the moving layer. Route lines use
+**Probe failed**, **Monitoring warning** and **Stale observation** rather than
+claiming a network route is down; stale observations have no moving marker.
+
+Public checks use workers with suitable IPv4/IPv6 and ping connectivity, preferring
+the configured region and falling back elsewhere when needed. A worker with no
+route, missing permissions or an unavailable check tool produces a monitoring
+warning, not proof that your server is down. If no suitable worker or independent
+confirmer is available, availability is unknown unless another valid fresh signal
+establishes it. Private collector checks retain their authorized local scope.
+
+The public platform status page separates endpoint availability from operational
+health. A worker can respond while a monitoring subsystem is degraded. Its new
+history shows actual observation coverage and unknown samples; legacy mixed-health
+uptime totals are not converted into an artificial 100 percent.
+
 **Monitoring Worker Location** controls Worker-routed checks; it is not a physical location. ICMP, TCP and HTTP(S) monitors can use any active Local Network Collector owned by the server owner that advertises the required capability and allows the target network. Prior discovery or a linked local resource is not required for these checks. SNMP additionally requires a linked resource and verified SNMP credentials. DNS and TLS checks remain Worker-routed. A private IP requires an authorized local executor.
 
 When changing an external target to an internal IP in Hardware or Software settings,

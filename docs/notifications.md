@@ -11,6 +11,11 @@ Notifications have three parts: a delivery gateway, a routing rule, and the even
 
 An enabled gateway alone does not subscribe a server to alerts. Likewise, a policy without a matching route and working gateway cannot deliver a notification.
 
+Webhook delivery requires HTTPS and a public destination. Every resolved IP address
+must pass the destination checks, and the connection uses only those checked
+addresses while preserving the original hostname for certificate verification.
+Redirects are not followed; private-network webhook endpoints are not supported.
+
 ## Delivery state
 
 Use notification history to distinguish queued, sent, retried, and failed deliveries. Provider rate limits, invalid credentials, unmatched routes, and disabled policies have different remedies. Avoid putting provider secrets in rule names or message bodies.
@@ -25,7 +30,40 @@ gateway health, failures, and suppression. A quiet window or healthy gateway doe
 prove routing coverage; use the routing simulator for that. Gateway setup remains under
 **Gateways → Add or edit gateways**.
 
-### Message defaults
+### Saved messages
+
+**Settings → Notifications → Messages** is a reusable message library. Create a named
+**Alert** or **Recovery** message, choose a provider format, and edit its title and
+body. You can search, edit, duplicate and delete saved messages, or start a draft
+from the built-in starters. General starters offer separate **Alert** and **Recovery**
+drafts; event-specific starters show their intended message type and need matching
+flow conditions. On phones, **Content** and **Preview** are separate tabs;
+on larger screens they appear side by side. Variables can be searched and inserted
+at the cursor; the preview uses sample values and sends nothing.
+
+The active workspace selects your personal library or a team library. Team members
+can read shared messages; only owners and admins of an active team can change them.
+Switching workspaces while editing keeps the draft in its original workspace, which
+is shown above the editor. Save conflicts preserve your draft instead of overwriting
+someone else's changes. Writes are rate-limited per account.
+
+In a flow's gateway output, **Copy a saved message** lists messages for that workspace
+whose format matches the gateway, plus provider-independent messages. Copying replaces
+only the selected Alert or Recovery fields. The other message type is kept.
+The output stores independent text: later library edits or deletion do not alter
+existing flow copies. Simulate and save the flow to publish the copied text.
+**Use inherited defaults** clears both types of output overrides so normal fallback
+resolution applies again.
+
+Creating or saving a library message alone does not change delivery or routing.
+Neither starters nor preview scenarios create event filters; add matching conditions
+to the flow for event-specific wording. Existing personal defaults, gateway templates
+and inline flow messages are preserved.
+
+### Advanced provider defaults
+
+Open **Messages → Advanced provider defaults** to edit the existing personal fallback
+templates. These are separate from the named library.
 
 Message templates can be customized before a gateway is configured. Switch between
 **Alert** and **Recovery** without losing your draft. The preview uses synthetic samples
@@ -53,12 +91,18 @@ expiry, account security, digests, escalation, and maintenance. A recovery start
 targets recovery fields automatically, including when applied to a flow output.
 Selecting a starter or preview event does not create a routing filter: use matching
 conditions on a flow output to restrict event-specific messages.
+In flow outputs, a general Alert-or-Recovery example fills the last-focused type's
+title and message, preserving the opposite type. Event-specific examples always
+fill their declared type. Examples are independent copies, just like saved messages.
 An explicitly selected event uses its own reason and severity instead of an unrelated
 scenario's incident description. Account, team, and data previews omit synthetic
-server and metric context.
+server and metric context. Single-event starters use the same plain-text content
+as the built-in catalog, including server-online and maintenance-ended notices.
 
 Use `{{eventLabel}}` for the readable event name and `{{eventType}}` for the internal
-event code. Built-in template version 3 keeps unavailable metrics out of messages while
+event code. Built-in template version 4 adds readable event context to host messages,
+keeps failed checks and missing observations distinct from whole-host outages,
+and scopes recovery wording to the cleared condition. It keeps unavailable metrics out of messages while
 retaining actual zero readings and configured thresholds. Recovery describes the
 cleared condition rather than asserting that the whole server is healthy. New defaults
 apply only where no saved override takes precedence; personal, gateway, and flow
