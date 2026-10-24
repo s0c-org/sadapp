@@ -4,7 +4,7 @@ set -euo pipefail
 BASE_URL="${1:-}"
 CHANNEL="${2:-stable}"
 AUTO_UPDATE="${3:-}"
-EXPECTED_SIGNING_KEY_FINGERPRINT="2B2333E4F37359BADD4F72A6394AA75F2815A5C3"
+EXPECTED_SIGNING_KEY_FINGERPRINT="D1B7FC190D023F05C27C8AF3267463E5D478CA78"
 
 [[ "${EUID}" -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
 [[ -n "${BASE_URL}" ]] || { echo "Usage: $0 BASE_URL [stable|canary] [--enable-auto-update]" >&2; exit 1; }

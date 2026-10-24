@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly DEB_REPOSITORY_URL="https://deb.sadapp.org"
 readonly RPM_REPOSITORY_URL="https://rpm.sadapp.org"
-readonly EXPECTED_SIGNING_KEY_FINGERPRINT="2B2333E4F37359BADD4F72A6394AA75F2815A5C3"
+readonly EXPECTED_SIGNING_KEY_FINGERPRINT="D1B7FC190D023F05C27C8AF3267463E5D478CA78"
 readonly CONFIG_FILE="/etc/default/sadapp-local-network-collector"
 channel="stable"
 enrollment_token=""

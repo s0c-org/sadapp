@@ -13,4 +13,9 @@ Only the latest released versions of `sadapp-host-agent` and `sadapp-local-netwo
 ## Package integrity
 
 Packages from `deb.sadapp.org` / `rpm.sadapp.org` are signed with the key fingerprint
-`2B2333E4F37359BADD4F72A6394AA75F2815A5C3`. The installers in [`install/`](install/) verify this fingerprint before trusting the repository.
+`D1B7FC190D023F05C27C8AF3267463E5D478CA78`. The installers in [`install/`](install/) verify this fingerprint before trusting the repository.
+
+The repository signing key rotated on 2026-10-24. Existing installations must
+update their SadApp repository keyring before refreshing package metadata. Verify
+the full fingerprint above before installing the replacement public key; do not
+disable package or repository signature verification.
