@@ -354,7 +354,7 @@ async fn fetch_collection_body(
             .header(CONTENT_TYPE, "application/json")
             .body(body.clone());
     }
-    let mut response = request.send().await.map_err(|error| {
+    let response = request.send().await.map_err(|error| {
         let message = if error.is_timeout() {
             "request timed out"
         } else if error.is_connect() {
@@ -364,6 +364,13 @@ async fn fetch_collection_body(
         };
         TaskError::failed("HTTP_REQUEST_FAILED", message)
     })?;
+    read_collection_response(response, require_json).await
+}
+
+async fn read_collection_response(
+    mut response: reqwest::Response,
+    require_json: bool,
+) -> Result<Vec<u8>, TaskError> {
     if response.status().is_redirection() {
         return Err(TaskError::policy("redirects are not allowed"));
     }
@@ -378,12 +385,21 @@ async fn fetch_collection_body(
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .is_none_or(|value| value.split(';').next() != Some("application/json"))
+            .is_none_or(|value| {
+                let media_type = value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                media_type != "application/json"
+                    && !(media_type.starts_with("application/") && media_type.ends_with("+json"))
+            })
     {
-        return Err(TaskError::failed(
-            "REST_CONTENT_TYPE",
-            "REST response must be application/json",
-        ));
+        tracing::warn!(
+            error_code = "REST_CONTENT_TYPE",
+            "REST response has a missing or non-JSON content type; validating JSON body and numeric mappings"
+        );
     }
     if response
         .content_length()
@@ -2331,6 +2347,58 @@ mod tests {
         assert!(resolve_allowed("8.8.8.8", 53, &policy).await.is_err());
         assert!(resolve_allowed("10.0.0.1", 80, &policy).await.is_err());
         assert!(resolve_allowed("192.168.1.10", 80, &policy).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rest_validates_body_instead_of_trusting_content_type() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for header in [
+            "",
+            "Content-Type: text/plain\r\n",
+            "Content-Type: text/html\r\n",
+            "Content-Type: application/json; charset=utf-8\r\n",
+            "Content-Type: Application/JSON\r\n",
+            "Content-Type: application/vnd.device+json\r\n",
+        ] {
+            for body in [
+                r#"{"value":3}"#,
+                "<html>Not JSON</html>",
+                r#"{"value":"3"}"#,
+                r#"{"other":3}"#,
+                r#"{"value":null}"#,
+                r#"{"value":3"#,
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let raw = format!(
+                    "HTTP/1.1 200 OK\r\n{header}Content-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 1024];
+                    stream.read(&mut request).await.unwrap();
+                    stream.write_all(raw.as_bytes()).await.unwrap();
+                });
+                let response = reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .unwrap()
+                    .get(format!("http://{address}/"))
+                    .send()
+                    .await
+                    .unwrap();
+                let bytes = read_collection_response(response, true).await.unwrap();
+                let samples =
+                    map_rest_json(&bytes, &[json!({ "path": "value", "metricKey": "value" })]);
+                if body == r#"{"value":3}"# {
+                    assert_eq!(samples.unwrap()[0].value, 3.0);
+                } else {
+                    assert!(samples.is_err(), "accepted invalid reading: {body}");
+                }
+            }
+        }
     }
 
     #[tokio::test]

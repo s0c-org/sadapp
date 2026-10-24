@@ -15,15 +15,17 @@ Existing `/software/new` bookmarks redirect while preserving context.
 
 Software uses the same Connection setup progress header, form panels and live
 connection-summary sidebar as Hardware and Local Network Collector onboarding.
-Choose a check type from the protocol cards; the summary follows the selected
-service, target and automatic executor.
+Choose a check type from the protocol cards before creating a service or selecting
+an existing host. The selected protocol carries into configuration and remains
+editable there; the summary follows the selected service, target and automatic
+executor.
 
 Links can pass `host=<routeKey>`, `resource=<resource ID>`, `type`, `target` and
 `port`. The service must belong to the selected host. Unsupported protocol values
 fall back to PING. Changing between a URL check and Ping/TCP converts the target
 appropriately; customized names are retained.
 
-Choose PING (ICMP), SNMP, TCP, DNS, TLS, HTTP(S), or REST, a target and interval, and
+Choose PING (ICMP), TCP, DNS, TLS, HTTP(S), or REST, a target and interval, and
 **Required** or **Advisory** service-health role. DNS optionally accepts expected
 IP addresses. TLS and HTTP(S) expose certificate-warning days; HTTP(S) also
 exposes expected status and certificate verification. Protocol hints describe
@@ -36,12 +38,22 @@ active status and allowed CIDR. Missing coverage blocks creation instead of
 sending a private target to public workers. Automatic private-network detection
 uses literal IPv4/IPv6 addresses; use a private IP in local endpoint URLs rather
 than an internal-only DNS name. DNS and TLS do not support local execution.
-SNMP additionally requires linked, verified host credentials and enabled polling;
-the creation form does not edit credentials. The existing API remains
+SNMP device telemetry is configured under Hardware, not Software onboarding.
+The existing API remains
 authoritative and displays validation or permission failures without discarding
 the draft.
 
 REST needs a JSON field path, reading name and optional stable metric key.
+Local REST is enabled on creation and starts recurring polling automatically after
+successful endpoint verification. Failed verification blocks recurring polling;
+Checks shows that state rather than claiming no collection is configured. Review
+the collector task error and correct the endpoint before retrying. **Retest REST
+endpoint** in check settings queues verification using the saved URL, mappings and
+vault credentials, including all saved readings. Save or discard edits first.
+Successful retesting enables recurring polling, including for a previously paused endpoint.
+The endpoint must return valid JSON; a missing or incorrect `Content-Type` header
+is logged as a collector warning rather than blocking valid readings.
+This relaxed header handling requires an updated Local Network Collector.
 Values must be JSON numbers, not numeric strings. Local REST uses endpoint
 verification and recurring collector polling. Public REST uses updated Monitoring
 Workers advertising REST capability, accepts unauthenticated GET only, requires a
