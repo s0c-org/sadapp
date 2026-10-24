@@ -44,6 +44,26 @@ health. A worker can respond while a monitoring subsystem is degraded. Its new
 history shows actual observation coverage and unknown samples; legacy mixed-health
 uptime totals are not converted into an artificial 100 percent.
 
+For Monitoring Workers, one failed status connection is a coverage gap, not proof
+of downtime. A fresh healthy response means both available and operational;
+a responding degraded worker remains available. When the control-plane route
+fails, other worker locations can independently check the worker. Confirmed
+downtime requires repeated transport failures from two independent locations
+without a fresh successful response. Incompatible IPv4/IPv6 connectivity and local
+routing failures cannot confirm an outage. Without enough evidence, status is Unknown.
+
+Availability percentages use known observations only. **Availability coverage**
+shows how many observations could establish availability; grey lower edges on
+daily availability bars identify partial coverage. Earlier single-observer
+reachability remains separate from confirmed worker history, unchanged.
+These sample ratios are not continuous, time-weighted uptime guarantees.
+
+Control-plane status uses public HTTPS checks from multiple Monitoring Worker
+locations, rather than the control plane asserting its own reachability.
+Missing or stale independent observations show unknown status and incomplete
+monitoring coverage. Worker connectivity problems cannot confirm a platform
+outage. The status page itself is still hosted on the platform.
+
 **Monitoring Worker Location** controls Worker-routed checks; it is not a physical location. ICMP, TCP and HTTP(S) monitors can use any active Local Network Collector owned by the server owner that advertises the required capability and allows the target network. Prior discovery or a linked local resource is not required for these checks. SNMP additionally requires a linked resource and verified SNMP credentials. DNS and TLS checks remain Worker-routed. A private IP requires an authorized local executor.
 
 When changing an external target to an internal IP in Hardware or Software settings,
