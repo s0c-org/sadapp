@@ -122,6 +122,14 @@ checks intact; associated discovery findings are ignored.
 
 ### Software service workspace
 
+REST readings have a display name (for example **Heap used**) and a separate JSON
+field path (for example `espHeapUsed`). New readings generate a metric key such as
+`heap.used` from the name. **Advanced metric identity** allows an explicit key.
+Existing keys are retained when a display name changes so history remains attached.
+The path is a field in the JSON response, not the endpoint URL. Metric keys use
+lowercase letters, numbers, dots, underscores and hyphens; display names allow
+spaces and capitals. Reading cards and charts show the display name when configured.
+
 Opening a grouped Software row goes to `/software/[id]?view=service`, showing the related checks rather than an arbitrary single check. Grouping follows the same host identity rules as the inventory: linked server first, then route identity, then an unambiguous normalized host address. Shared addresses belonging to multiple managed hosts are not merged automatically. Each child link opens its individual check.
 
 - **Overview** shows the actual check count, latest observation, executor, and protocol results. Service timings are listed separately by check and protocol rather than substituting the newest ICMP, TLS, or HTTP measurement into one response-time figure. These are total check durations, not separately measured connection or handshake phases. Service Overview and History graphs include all service checks. Non-healthy checks are named explicitly without changing the existing aggregate health policy.

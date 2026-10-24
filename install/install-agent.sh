@@ -205,7 +205,7 @@ fi
 printf '  3. Trust the SadApp signing key and configure the repository.\n'
 printf '  4. Install or update sadapp-host-agent to the latest %s release.\n' "${CHANNEL}"
 printf '  5. Store the invitation token in /etc/default/sadapp-host-agent.\n'
-printf '  6. Enable and start sadapp-host-agent.service.\n'
+printf '  6. Enable and restart sadapp-host-agent.service to load the saved credentials.\n'
 printf '\n%sNo system changes have been made yet.%s\n' "${YELLOW}" "${RESET}"
 confirm_changes "Proceed with these changes?"
 
@@ -282,9 +282,15 @@ printf 'API_INVITE_TOKEN=%s\n' "${INVITE_TOKEN}" >> "${CONFIG_FILE}"
 chmod 0600 "${CONFIG_FILE}"
 success "Invitation token stored with root-only permissions."
 
-show_step 6 6 "Enable and start the service"
+show_step 6 6 "Enable and restart the service with the saved credentials"
 systemctl daemon-reload
-systemctl enable --now sadapp-host-agent.service
+systemctl enable sadapp-host-agent.service
+if ! systemctl restart sadapp-host-agent.service; then
+  fail "Unable to restart the agent. Inspect: journalctl -u sadapp-host-agent -n 50 --no-pager"
+fi
+if ! systemctl is-active --quiet sadapp-host-agent.service; then
+  fail "The agent is not running. Inspect: journalctl -u sadapp-host-agent -n 50 --no-pager"
+fi
 
 printf '\n%s+----------------------------------------------------------+%s\n' "${GREEN}" "${RESET}"
 printf '%s|%s  %sInstallation complete%s                               %s|%s\n' "${GREEN}" "${RESET}" "${BOLD}" "${RESET}" "${GREEN}" "${RESET}"
