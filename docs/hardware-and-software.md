@@ -27,6 +27,12 @@ Global Add check can create a new software-only service or select an existing ho
 See [Adding a check](software-add-check.md).
 Shared host settings link back to Software and to SNMP trap history.
 
+Local Network Collectors support SNMPv1, v2c and v3. Credential verification is
+a read-only identity probe, not recurring telemetry collection. After verification,
+enable SNMP polling and save to create or resume the recurring check. Saving an
+already enabled, verified device also restores a missing check. The linked
+collector must be active, SNMP-capable and cover the target's allowed private CIDR.
+
 In the Software workspace, Overview contains readings and recent performance.
 Checks contains the service monitoring summary, protocol timings and check cards.
 History contains the filterable recorded-results log without graphs. Settings
