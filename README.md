@@ -1,7 +1,7 @@
 # SadApp – open components
 
 [![CI](https://github.com/s0c-org/sadapp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/s0c-org/sadapp/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/s0c-org/sadapp)](https://github.com/s0c-org/sadapp/releases)
+[![Latest prerelease](https://img.shields.io/github/v/release/s0c-org/sadapp?include_prereleases&sort=date&label=latest%20prerelease)](https://github.com/s0c-org/sadapp/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **Understand your infrastructure, from server health to private-network services.**
