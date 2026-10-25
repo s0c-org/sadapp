@@ -2363,8 +2363,9 @@ mod tests {
         ] {
             for body in [
                 r#"{"value":3}"#,
+                r#"{"value":true}"#,
+                r#"{"value":"ok"}"#,
                 "<html>Not JSON</html>",
-                r#"{"value":"3"}"#,
                 r#"{"other":3}"#,
                 r#"{"value":null}"#,
                 r#"{"value":3"#,
@@ -2393,7 +2394,11 @@ mod tests {
                 let samples =
                     map_rest_json(&bytes, &[json!({ "path": "value", "metricKey": "value" })]);
                 if body == r#"{"value":3}"# {
-                    assert_eq!(samples.unwrap()[0].value, 3.0);
+                    assert_eq!(samples.unwrap()[0].value, json!(3.0));
+                } else if body == r#"{"value":true}"# {
+                    assert_eq!(samples.unwrap()[0].value, json!(true));
+                } else if body == r#"{"value":"ok"}"# {
+                    assert_eq!(samples.unwrap()[0].value, json!("ok"));
                 } else {
                     assert!(samples.is_err(), "accepted invalid reading: {body}");
                 }

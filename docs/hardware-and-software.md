@@ -152,7 +152,9 @@ checks intact; associated discovery findings are ignored.
 ### Software service workspace
 
 REST readings have a display name (for example **Heap used**) and a separate JSON
-field path (for example `espHeapUsed`). New readings generate a metric key such as
+field path (for example `espHeapUsed`). Readable JSON numbers, booleans, and
+strings up to 4,000 bytes can be mapped; strings remain text and are not coerced
+to numbers. Nulls, arrays, and objects are not readings. New readings generate a metric key such as
 `heap.used` from the name. **Advanced metric identity** allows an explicit key.
 Existing keys are retained when a display name changes so history remains attached.
 The path is a field in the JSON response, not the endpoint URL. Metric keys use
@@ -161,16 +163,18 @@ spaces and capitals. Reading cards and charts show the display name when configu
 
 To create a reading for an existing host, open **Add check**, select
 **REST (JSON readings)**, and choose an active Local Network Collector reporting
-the `rest` capability. Enter a read-only HTTP(S) GET URL, the numeric JSON field
-path and its display name. Private IP targets must fall inside the collector's
+the `rest` capability. Enter a read-only HTTP(S) GET URL, the JSON field path and
+its display name. Private IP targets must fall inside the collector's
 allowed CIDRs. Polling intervals start at 60 seconds. Creation saves a separate
 Software entry attached to that host and queues endpoint verification; recurring
 polling starts only after successful verification. Authentication can be configured
-in the saved reading's Settings. JSON numeric strings are not converted to numbers.
+in the saved reading's Settings. A plain-text response body such as `ok` is not
+accepted because the endpoint must return valid JSON. Boolean and text readings
+are telemetry only; they do not change reachability or service health.
 
 Opening a grouped Software row goes to `/software/[id]?view=service`, showing the related checks rather than an arbitrary single check. Grouping follows the same host identity rules as the inventory: linked server first, then route identity, then an unambiguous normalized host address. Shared addresses belonging to multiple managed hosts are not merged automatically. Each child link opens its individual check.
 
-- **Overview** shows the actual check count, latest observation, executor, and protocol results. Service timings are listed separately by check and protocol rather than substituting the newest ICMP, TLS, or HTTP measurement into one response-time figure. These are total check durations, not separately measured connection or handshake phases. Service Overview and History graphs include all service checks. Non-healthy checks are named explicitly without changing the existing aggregate health policy.
+- **Overview** shows the actual check count, latest observation, executor, protocol results, and latest mapped endpoint readings. Endpoint readings are distinct from reachability and service health. Numeric REST readings have history charts; booleans and strings appear as timestamped values. Service timings are listed separately by check and protocol rather than substituting the newest ICMP, TLS, or HTTP measurement into one response-time figure. These are total check durations, not separately measured connection or handshake phases. Service Overview and History graphs include all service checks. Non-healthy checks are named explicitly without changing the existing aggregate health policy.
 - **Checks** provides mobile-friendly cards with targets, protocols, executors, schedules, warnings, HTTP status, errors, and direct Results/Configure links.
 - **History** has a shared one-hour, 24-hour, or seven-day window, separate latency and outcome graphs, endpoint reading trends, local check requests, and expandable results with safe protocol details and execution source. At most 500 representative observations per series are shown; these sampled results are not an uptime SLA. Missing latency does not hide a failed outcome. Visible history refreshes after every four active 30-second detail polls, rather than on every poll. Manual refresh and range changes also reload it.
 - **Settings** (`/software/[id]/settings`) edits the selected check. Website settings include expected HTTP status and TLS verification; DNS includes expected addresses; TLS/website checks include certificate warning days. Executor choices include the server owner's active collectors, independent of the saved host IP. Change the target, select Local network collector and a collector covering the new address, then save together. Collector options show their allowed CIDRs; the API validates ownership, capabilities and networks. Primary checks still update their shared host settings.

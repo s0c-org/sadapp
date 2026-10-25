@@ -43,7 +43,11 @@ The existing API remains
 authoritative and displays validation or permission failures without discarding
 the draft.
 
-REST needs a JSON field path, reading name and optional stable metric key.
+REST supports multiple JSON field paths from one endpoint response. Add one
+reading for each JSON number, boolean, or string field, with its own display name
+and optional stable metric key; keys must be unique per endpoint. Paths use dot
+notation and numeric array indexes, such as `sensors.0.temperature`.
+Local REST settings let you select among multiple configured endpoint URLs.
 Local REST is enabled on creation and starts recurring polling automatically after
 successful endpoint verification. Failed verification blocks recurring polling;
 Checks shows that state rather than claiming no collection is configured. Review
@@ -54,7 +58,12 @@ Successful retesting enables recurring polling, including for a previously pause
 The endpoint must return valid JSON; a missing or incorrect `Content-Type` header
 is logged as a collector warning rather than blocking valid readings.
 This relaxed header handling requires an updated Local Network Collector.
-Values must be JSON numbers, not numeric strings. Local REST uses endpoint
+Values must be JSON numbers, booleans, or strings up to 4,000 bytes. Strings
+remain text and are not converted to numbers; nulls, arrays, and objects are not
+readings. The response must still be valid JSON, so a plain-text `ok` body is not
+accepted. Boolean and string readings are telemetry only and do not determine
+the check result or service-health badge. Collector affinity is derived by the
+backend from the endpoint host. Local REST uses endpoint
 verification and recurring collector polling. Public REST uses updated Monitoring
 Workers advertising REST capability, accepts unauthenticated GET only, requires a
 successful 2xx JSON response, disables redirects and limits responses to 1 MiB and

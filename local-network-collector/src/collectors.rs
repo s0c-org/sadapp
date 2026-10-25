@@ -13,7 +13,7 @@ pub struct MetricSample {
     pub metric_key: String,
     pub unit: Option<String>,
     pub value_type: String,
-    pub value: f64,
+    pub value: Value,
     pub labels: Map<String, Value>,
 }
 
@@ -71,7 +71,7 @@ pub fn parse_prometheus(
             metric_key,
             unit,
             value_type,
-            value,
+            value: Value::from(value),
             labels,
         });
         if samples.len() > MAX_SAMPLES {
@@ -184,15 +184,35 @@ pub fn map_rest_json(body: &[u8], mappings: &[Value]) -> Result<Vec<MetricSample
             let value = path.split('.').try_fold(&document, |value, part| {
                 value
                     .get(part)
+                    .or_else(|| {
+                        value.as_array().and_then(|array| {
+                            part.parse::<usize>()
+                                .ok()
+                                .and_then(|index| array.get(index))
+                        })
+                    })
                     .ok_or_else(|| anyhow::anyhow!("REST mapping path not found"))
             })?;
-            let number = value
-                .as_f64()
-                .ok_or_else(|| anyhow::anyhow!("REST mapped value is not numeric"))?;
             let metric_key = required_text(object, "metricKey")?;
-            if !number.is_finite() || !valid_key(metric_key) {
-                bail!("invalid REST mapped value");
+            if !valid_key(metric_key) {
+                bail!("invalid REST metric key");
             }
+            let (mapped_value, value_type, unit) = match value {
+                Value::Number(number) => {
+                    let number = number
+                        .as_f64()
+                        .filter(|number| number.is_finite())
+                        .ok_or_else(|| anyhow::anyhow!("REST mapped number is not finite"))?;
+                    (
+                        Value::from(number),
+                        object.get("valueType").and_then(Value::as_str).unwrap_or("GAUGE"),
+                        object.get("unit").and_then(Value::as_str).map(str::to_owned),
+                    )
+                }
+                Value::Bool(_) => (value.clone(), "BOOLEAN", None),
+                Value::String(text) if text.len() <= 4_000 => (value.clone(), "TEXT", None),
+                _ => bail!("REST mapped value must be a finite number, boolean, or string of at most 4000 bytes"),
+            };
             let labels = object
                 .get("labels")
                 .and_then(Value::as_object)
@@ -207,16 +227,9 @@ pub fn map_rest_json(body: &[u8], mappings: &[Value]) -> Result<Vec<MetricSample
             }
             Ok(MetricSample {
                 metric_key: metric_key.into(),
-                unit: object
-                    .get("unit")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                value_type: object
-                    .get("valueType")
-                    .and_then(Value::as_str)
-                    .unwrap_or("GAUGE")
-                    .into(),
-                value: number,
+                unit,
+                value_type: value_type.into(),
+                value: mapped_value,
                 labels,
             })
         })
@@ -293,17 +306,64 @@ mod tests {
     }
 
     #[test]
-    fn maps_only_bounded_numeric_rest_paths() {
+    fn preserves_numeric_rest_counter_mappings() {
         let samples = map_rest_json(
-            br#"{"system":{"temperature":37.5}}"#,
-            &[json!({"path":"system.temperature","metricKey":"temperature","unit":"celsius"})],
+            br#"{"requests":42}"#,
+            &[json!({"path":"requests","metricKey":"requests","valueType":"COUNTER","unit":"requests"})],
         )
         .unwrap();
-        assert_eq!(samples[0].value, 37.5);
+        assert_eq!(samples[0].value, json!(42.0));
+        assert_eq!(samples[0].value_type, "COUNTER");
+        assert_eq!(samples[0].unit.as_deref(), Some("requests"));
+    }
+
+    #[test]
+    fn maps_bounded_numeric_boolean_and_string_rest_paths() {
+        let samples = map_rest_json(
+            br#"{"system":{"temperature":37.5,"online":true,"state":"ok"}}"#,
+            &[
+                json!({"path":"system.temperature","metricKey":"temperature","unit":"celsius"}),
+                json!({"path":"system.online","metricKey":"online","unit":"ignored"}),
+                json!({"path":"system.state","metricKey":"state"}),
+            ],
+        )
+        .unwrap();
+        assert_eq!(samples[0].value, json!(37.5));
+        assert_eq!(samples[0].value_type, "GAUGE");
+        assert_eq!(samples[0].unit.as_deref(), Some("celsius"));
+        assert_eq!(samples[1].value, json!(true));
+        assert_eq!(samples[1].value_type, "BOOLEAN");
+        assert_eq!(samples[1].unit, None);
+        assert_eq!(samples[2].value, json!("ok"));
+        assert_eq!(samples[2].value_type, "TEXT");
         assert!(map_rest_json(
-            br#"{"system":{"state":"ok"}}"#,
+            br#"{"system":{"state":null}}"#,
             &[json!({"path":"system.state","metricKey":"state"})]
         )
         .is_err());
+        assert!(map_rest_json(
+            format!(r#"{{"state":"{}"}}"#, "x".repeat(4_001)).as_bytes(),
+            &[json!({"path":"state","metricKey":"state"})]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn maps_rest_values_from_multiple_fields_and_array_paths() {
+        let samples = map_rest_json(
+            br#"{"system":{"heapUsed":12},"sensors":[{"temperature":22.5}]}"#,
+            &[
+                json!({ "path": "system.heapUsed", "metricKey": "heap.used" }),
+                json!({ "path": "sensors.0.temperature", "metricKey": "temperature" }),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.value.as_f64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![12.0, 22.5]
+        );
     }
 }
