@@ -1,5 +1,9 @@
 # SadApp – open components
 
+[![CI](https://github.com/s0c-org/sadapp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/s0c-org/sadapp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/s0c-org/sadapp)](https://github.com/s0c-org/sadapp/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 This repository contains the **open-source parts of [SadApp](https://sadapp.org)**, the infrastructure monitoring platform: everything that runs inside *your* network, so you can audit exactly what is installed on your hosts.
 
 | Path | What it is |
@@ -25,6 +29,19 @@ node snmp-profiles/scripts/check-profiles.mjs snmp-profiles/profiles
 ```
 
 Packaging (`nfpm`) and cross-compilation notes live in each component's README.
+
+## Releases and CI
+
+Download accepted packages from [Releases](https://github.com/s0c-org/sadapp/releases).
+Linux package promotion requires successful platform, native-package, and public
+source CI checks. Version tags initiate signed package drafts; stable publication
+still requires operator review. Verify the signed checksum manifest against an
+independently trusted signing-key fingerprint before installing.
+GitHub release assets do not imply that APT/RPM repositories were updated.
+
+CI runs on a repository-scoped self-hosted runner for trusted main pushes and
+version tags only. Pull requests do not execute automatically on that host;
+maintainers review and validate contributions before merging.
 
 ## How this repository is maintained
 

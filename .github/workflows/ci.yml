@@ -3,7 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
+    tags: ['host-agent-v*', 'collector-v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,10 +15,12 @@ concurrency:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, sadapp-public-build]
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         crate: [snmp-profile-engine, local-network-collector, host-agent]
     steps:
@@ -34,7 +37,8 @@ jobs:
           cargo audit --file ${{ matrix.crate }}/Cargo.lock
 
   profiles-and-installers:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, sadapp-public-build]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
