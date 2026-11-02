@@ -20,8 +20,21 @@ The builder uses persistent sections at `/status-pages/<id>` (Layout), `/preview
 `/settings`, `/incidents` and `/integrations`. Switching sections preserves unsaved inputs.
 Old `/settings/status-pages/**` and `/status-pages/<id>/canvas` links remain compatible.
 The header distinguishes Draft, Live, Suspended, saving and unsaved states.
+Draft pages offer **Review & publish**, which opens Settings without publishing.
+Live pages explicitly warn that saved edits immediately affect visitors.
 
-**Advanced controls** reveal precise canvas/threshold/appearance configuration without
+Use **Add card** to open the searchable source-grouped library. Descriptions explain
+what each card shows; an empty search offers **Clear card filters**. Adding or duplicating
+a card opens its inspector automatically. The **Page outline** selects cards by their
+custom heading without searching a long canvas. Selected cards are highlighted.
+The inspector sits alongside the canvas on wide screens and above it on smaller screens;
+**Close inspector** or Escape returns focus to the selecting control.
+**Third / Half / Full** width and **Compact / Standard / Tall** height presets use the
+same collision-aware, undoable save pipeline as dragging. Standard or Tall leaves more
+space for chart previews; **Preview** shows the visitor layout without editor controls.
+
+History windows, graph style, gauge style and non-percentage gauge maxima are available
+without advanced mode. **Advanced controls** reveal precise canvas/threshold/appearance configuration without
 resetting hidden settings. Webhook and domain configuration lives in **Integrations**.
 Settings use an explicit save; failed saves retain their inputs. Only metadata settings
 are recoverable in the current browser tab after reload. Passwords, webhook secrets,
@@ -73,7 +86,7 @@ Agent/SNMP/Ping source. Thresholds use the selected metric's unit; changing a la
 not convert units. Graphs do not install new protocol checks or run new probes.
 
 Card titles and accent colors can be customized independently of their data source.
-Advanced controls expose supported thresholds, graph appearance and precise layout
+Advanced controls expose supported thresholds, legend/color options and precise layout
 without resetting values when switched off. The external inspector leaves the card's
 rendered preview unobstructed. Duplicate, reorder, compact and undo/redo are available;
 deletion preserves existing gaps until **Compact** is requested.
@@ -83,6 +96,12 @@ An empty history is shown explicitly rather than generating synthetic successful
 Statistics use available recorded samples, not an assumption of continuous monitoring.
 Canvas previews and private/public pages share the same renderer. Graphs have accessible
 names and numeric summaries, and measurement cards do not expose inventory or secrets.
+Metric, response-time and protocol history charts, radial gauges and progress gauges
+use the shared ECharts renderer, including reduced-motion preferences. Histories use
+real UTC timestamps and a common value scale per chart, retain explicit null gaps,
+and include all recorded samples rather than dropping results to fit a fixed bar count.
+Tooltips show recorded values; threshold colors and gauge units remain configurable.
+The 90-day uptime strip remains a compact daily status indicator.
 
 Portable exports and gallery templates retain card type, graph/gauge options and layout
 but remove real service IDs. Imported measurement cards need service assignment.
