@@ -32,19 +32,35 @@ For private addresses, make sure the selected worker can reach the target or use
 
 The customer workspace uses a persistent, collapsible sidebar on desktop and a navigation drawer on phones. The mobile bottom bar provides shortcuts to Overview, Hardware, Software and Discovery; open the navigation drawer for settings, support and the other workspace destinations. Search is available in page headers and with **Ctrl/Cmd + K**.
 
+Fleet maps automatically refresh two minutes after each completed fetch while the tab is visible; returning to a hidden tab refreshes immediately. Manual refresh remains available. The map stays visible during updates with a compact gold loading mascot; a failed refresh retains the previous snapshot and shows an error. **Map options**, **Map key** and **Browse** open in-map panels, including in fullscreen. Key and Browse scroll within the map instead of extending below it.
+
 Open **Settings → UI settings** to choose **Midnight cyan**, **Amber gold** or **Violet dusk**, standard or wide page width, LTR or RTL layout, and standard or larger text. Motion follows each device's accessibility setting unless you select **Reduce motion**, which also disables chart and notification-flow animations. Compact inventory rows and discovered-workload visibility share the account preferences used by Hardware and Software.
 
 **Amber gold** is the default for new browsers and for **Reset to defaults**. Existing
 saved color choices are preserved. The SadApp running-server identity is gold across
 navigation, loading states, favicons and installed-app icons.
 
+**Workspace background** is independent of the color theme: choose **Dark solid**
+(default) for a uniform surface or **Brighter ambient** for theme-colored gradients
+and a subtle grid. The choice applies consistently to workspace and settings pages,
+including maintenance and alerting, and to public sign-in and recovery screens.
+It previews, saves and syncs with your other appearance preferences. Published
+status pages keep their publisher-selected presentation.
+
 Initial page loads use the running server alongside a labeled loading state or
 page-shaped skeleton. Background refreshes retain the last loaded content where
 available and use a compact updating indicator; retained data can be outdated if
 refresh fails. Buttons keep compact spinners. Reduced motion keeps the mascot static,
 and loading states do not simulate progress or delay completed requests.
+Route changes, access checks and the first data request reuse the destination's
+loading surface. Missing pages and request failures show themed recovery guidance,
+not an indefinite skeleton.
 
 Appearance changes preview immediately. **Save preferences** stores all UI preferences on your account; other devices load them after signing in or returning to the app. A local cache prevents appearance flashing during loading and supports the installed PWA. Until your first account-wide save, existing browser appearance remains the starting point; old Forest selections become Amber. **Discard changes** or leaving the page restores the saved appearance. **Reset to defaults** changes only the draft until saved. Staff administration keeps its independent palette.
+
+Use **Install as app** in the sidebar footer (also available in the phone's navigation drawer), or open **Settings → App & feedback**. When the browser offers installation, the button opens its native prompt only after you click. Otherwise, follow the Safari/iOS, Android or desktop browser instructions shown there. Installation requires browser support and HTTPS (or localhost); embedded browsers may need opening in a full browser. The install shortcut is hidden when running in a standalone app window. SadApp cannot reliably detect every existing installation when opened in a regular browser tab.
+
+The sidebar's **Feedback** shortcut opens the existing bug-report form with the current page path, without query strings. The support center also accepts feature suggestions and private support tickets. Review optional diagnostics before sending; do not include credentials or secrets. Bug reports are private unless you enable community visibility; feature requests are visible to signed-in users.
 
 The installed app opens the dashboard, supports portrait and landscape layouts, and reserves space for device safe areas. Its native launch splash uses the gold icon on charcoal where supported by the operating system. Full website and installed-app loads show a brief "Opening SadApp..." mascot until the app hydrates, then hand off to the page or its data-loading skeleton without an artificial delay. In-app navigation and resuming an already-open app do not replay this startup screen. If startup stalls, connection guidance and a reload link appear after 12 seconds. Offline navigation shows an explicit offline page rather than a cached account dashboard; monitoring data and authenticated API responses are not stored in the service-worker cache.
 

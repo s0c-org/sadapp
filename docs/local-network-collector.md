@@ -12,6 +12,24 @@ The Local Network Collector (LNC) is an outbound-only service for approved priva
 
 The `siteKey` groups tasks for collector routing. It is distinct from a Monitoring Worker location.
 
+### Physical location and precise map pins
+
+Open **Manage → Precise Fleet Map pin** to enter a label, latitude (-90 to 90)
+and longitude (-180 to 180). All three fields are required for a pin; zero is a
+valid coordinate. **Clear precise pin** removes the coordinates when saved.
+The physical-location note remains separate. A recognized Fleet Map region is an
+approximate fallback when no precise pin is set.
+
+Private account and staff maps use these coordinates for the collector and
+eligible locationless hosts/checks. Explicit host locations are never overwritten,
+and conflicting collector locations do not invent a shared host location. Changing
+coordinates does not change the site key, allowed networks or check routing.
+No browser GPS permission or external geolocation service is used.
+
+Deployment requires the `20261102173000_collector_map_coordinates` database migration
+before starting the updated control plane. No native collector package update is
+required; map coordinates are stored and resolved by the control plane.
+
 ### Package availability on localized systems
 
 The installer reads APT package policy in the C locale so the candidate check works
