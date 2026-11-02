@@ -41,8 +41,7 @@ already connected device. Renewal returns the link to use next.
 
 Maintenance uses local browser time, validates a positive duration of at most
 7 days and asks for confirmation before cancellation. Cancelled maintenance
-resumes alerting unless another applicable window remains active. Demo accounts
-show a read-only explanation.
+resumes alerting unless another applicable window remains active.
 
 ## Account security
 

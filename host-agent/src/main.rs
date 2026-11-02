@@ -466,6 +466,7 @@ struct ServerStatus {
     load_average: Option<LoadAverage>,
     cpu_usage_percent: f32,
     cpu_count: usize,
+    cpu_core_usage_percent: Vec<f32>,
     memory_total_bytes: u64,
     memory_used_bytes: u64,
     swap_total_bytes: u64,
@@ -2487,6 +2488,11 @@ fn gather_status(
         }),
         cpu_usage_percent: round_to(cpu_usage_percent, 1),
         cpu_count,
+        cpu_core_usage_percent: sys
+            .cpus()
+            .iter()
+            .map(|cpu| round_to(cpu.cpu_usage(), 1))
+            .collect(),
         memory_total_bytes: sys.total_memory(),
         memory_used_bytes: sys.used_memory(),
         swap_total_bytes: sys.total_swap(),

@@ -28,4 +28,14 @@ For private addresses, make sure the selected worker can reach the target or use
 - Open a resource name for its details, current readings, and available actions.
 - Open **Settings → Local Network Collectors** to check collector heartbeat, task state, and upload receipts.
 
+## Navigation, appearance and mobile use
+
+The customer workspace uses a persistent, collapsible sidebar on desktop and a navigation drawer on phones. The mobile bottom bar provides shortcuts to Overview, Hardware, Software and Discovery; open the navigation drawer for settings, support and the other workspace destinations. Search is available in page headers and with **Ctrl/Cmd + K**.
+
+Open **Settings → UI settings** to choose **Midnight cyan**, **Amber gold** or **Violet dusk**, standard or wide page width, LTR or RTL layout, and standard or larger text. Motion follows each device's accessibility setting unless you select **Reduce motion**, which also disables chart and notification-flow animations. Compact inventory rows and discovered-workload visibility share the account preferences used by Hardware and Software.
+
+Appearance changes preview immediately. **Save preferences** stores all UI preferences on your account; other devices load them after signing in or returning to the app. A local cache prevents appearance flashing during loading and supports the installed PWA. Until your first account-wide save, existing browser appearance remains the starting point; old Forest selections become Amber. **Discard changes** or leaving the page restores the saved appearance. **Reset to defaults** changes only the draft until saved. Staff administration keeps its independent palette.
+
+The installed app opens the dashboard, supports portrait and landscape layouts, and reserves space for device safe areas. Offline navigation shows an explicit offline page rather than a cached account dashboard; monitoring data and authenticated API responses are not stored in the service-worker cache.
+
 Start with [Host Agent](devices/host-agent), [SNMP devices](devices/snmp), or [Local Network Collector](devices/local-network-collector) for setup details.

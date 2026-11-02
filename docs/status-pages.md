@@ -91,7 +91,7 @@ Template-gallery sample previews are illustrative, not measurements from the pub
 ## Manage gallery templates
 
 **Publish to gallery** exports the page's portable layout to your public profile without
-real server IDs. An active, non-demo account with a username and enabled public profile is
+real server IDs. An active account with a username and enabled public profile is
 required. The live status page and the gallery template are separate: a draft/private
 status page can provide a layout without exposing its live telemetry.
 

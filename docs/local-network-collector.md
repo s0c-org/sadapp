@@ -76,8 +76,7 @@ corrected without losing the draft.
 **Drain** allows existing leases to finish without claiming new work. **Disable**
 prevents new leases and requires confirmation; existing work may still finish.
 **Delete** requires confirmation and removes credentials and active leases while
-retaining discovery audit history. Demo accounts can inspect and refresh but
-cannot change policy, register, retry, approve or delete.
+retaining discovery audit history.
 
 ## Logs and health
 

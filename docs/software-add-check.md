@@ -65,12 +65,27 @@ accepted. Boolean and string readings are telemetry only and do not determine
 the check result or service-health badge. Collector affinity is derived by the
 backend from the endpoint host. Local REST uses endpoint
 verification and recurring collector polling. Public REST uses updated Monitoring
-Workers advertising REST capability, accepts unauthenticated GET only, requires a
+Workers advertising REST capability, accepts GET only, requires a
 successful 2xx JSON response, disables redirects and limits responses to 1 MiB and
 10 seconds. Its minimum interval is 60 seconds. Public REST checks cannot switch
 to local execution in place; create a local reading through onboarding instead.
 Reading cards and charts use the display name; changing it retains the metric key
 and history.
+
+Public REST authentication can be configured by the server owner in Software
+settings using an authentication header name and value (for example,
+`Authorization` and `Bearer <token>`). Values are stored in the encrypted secret
+vault, not monitor configuration or API read-back. Empty fields preserve saved
+headers; use **Remove saved authentication headers** to clear them. Authenticated
+checks require HTTPS and never follow redirects. Replace or remove credentials
+before changing the endpoint origin. Reserved transport/cookie/proxy headers,
+line breaks and duplicate names are rejected.
+
+This feature requires both updated control-plane code and workers reporting
+`restAuth` support; older REST-capable workers are not assigned authenticated
+checks. Saving settings schedules a check, not a successful authentication test.
+Staff can preserve mappings but must hand endpoint/credential changes to the
+owner for authenticated checks.
 
 Leaving a modified form warns about unsaved changes. After creation, Software
 opens the new check's settings at `/software/monitor%3A<id>/settings`, where its
