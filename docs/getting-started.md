@@ -48,4 +48,12 @@ Appearance changes preview immediately. **Save preferences** stores all UI prefe
 
 The installed app opens the dashboard, supports portrait and landscape layouts, and reserves space for device safe areas. Its native launch splash uses the gold icon on charcoal where supported by the operating system. Full website and installed-app loads show a brief "Opening SadApp..." mascot until the app hydrates, then hand off to the page or its data-loading skeleton without an artificial delay. In-app navigation and resuming an already-open app do not replay this startup screen. If startup stalls, connection guidance and a reload link appear after 12 seconds. Offline navigation shows an explicit offline page rather than a cached account dashboard; monitoring data and authenticated API responses are not stored in the service-worker cache.
 
+Installed-app icons use versioned PNG URLs so a branding update does not reuse an old
+year-cached icon. After deploying an update, open SadApp online and fully close and
+reopen the installed app. Native launcher icons and splash screens are managed by
+the browser/operating system and can update later than the website. If they remain
+old, remove the installed app and install it again from the updated site. On iOS,
+remove the old Home Screen shortcut and add it again. Reinstalling can require
+signing in again; it does not delete your server-side account or monitoring data.
+
 Start with [Host Agent](devices/host-agent), [SNMP devices](devices/snmp), or [Local Network Collector](devices/local-network-collector) for setup details.
