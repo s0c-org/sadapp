@@ -100,18 +100,44 @@ server and metric context. Single-event starters use the same plain-text content
 as the built-in catalog, including server-online and maintenance-ended notices.
 
 Use `{{eventLabel}}` for the readable event name and `{{eventType}}` for the internal
-event code. Built-in template version 4 adds readable event context to host messages,
-keeps failed checks and missing observations distinct from whole-host outages,
-and scopes recovery wording to the cleared condition. It keeps unavailable metrics out of messages while
-retaining actual zero readings and configured thresholds. Recovery describes the
-cleared condition rather than asserting that the whole server is healthy. New defaults
+event code. Built-in template version 5 keeps the resource and event in the title,
+shows trigger readings once rather than repeating them in a full metric snapshot,
+and omits delivery-gateway names from operational alerts. Confirmed threshold
+reasons include the threshold actually crossed, not every configured limit.
+Checks, collector heartbeat loss, worker degradation and missing observations remain
+distinct from whole-host outages. Recovery describes the cleared condition rather
+than asserting that the whole server is healthy, and omits acknowledgement actions
+and unrelated metric snapshots. Available resource links and UTC event times are
+included; unavailable readings and durations are not invented. Actual zero readings
+remain valid. Provider adapters avoid adding a second severity label when the title
+already contains one. Threshold notification formatting uses the same templates in
+on, shadow and off pipeline modes; those modes still control decisions, not wording.
+Previews omit metrics and timing facts unrelated to the selected scenario. New defaults
 apply only where no saved override takes precedence; personal, gateway, and flow
 customizations are not rewritten.
+Numeric filters (`round`, `percent`, `bytes`, `duration`) leave missing values blank
+instead of turning them into a false zero. Add `|default:"Unavailable"` when an
+explicit missing-value label is useful.
+
+If existing deliveries still show **Gateway**, repeated severity labels inside the
+message body, old "has been resolved" text, or entire earlier alerts, inspect the
+recorded template source in History. Remove stale text from the highest-priority
+flow/gateway override, or clear that override to inherit the current defaults.
+**Reset all to defaults** in Advanced provider defaults resets personal overrides
+only; it does not change gateway or flow messages. A static copy of an earlier
+incident is not a dynamic template and will continue repeating until edited.
 
 **Send draft test**, under **Test and reset tools**, sends through an owned gateway
 without saving. It bypasses routing and saved overrides and uses the gateway test's
 synthetic values, not the selected on-screen scenario. Tests are recorded as
-`TEST_MESSAGE`. Do not interpret them as validation of an effective routed message.
+`TEST_MESSAGE`. Custom draft tests include a visible TEST label and synthetic-data
+disclaimer, and never include a sample acknowledgement link. Do not interpret them
+as validation of an effective routed message.
+
+Staff operator channels remain separate from customer gateways. Their worker alerts
+distinguish missing heartbeats from an explicitly offline lifecycle state. Entering
+maintenance or disabling backups closes the alert without claiming a recovery.
+A restored backup-agent heartbeat does not prove a successful remote backup.
 
 ### History
 
