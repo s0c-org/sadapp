@@ -12,6 +12,12 @@ The Local Network Collector (LNC) is an outbound-only service for approved priva
 
 The `siteKey` groups tasks for collector routing. It is distinct from a Monitoring Worker location.
 
+The installation page downloads the installer to a local file before execution.
+Review it, then run it with the selected stable or canary channel and supply the
+one-time token at the protected prompt. Manual repository commands install the
+package but do not replace enrollment. Package versions are listed independently
+for APT and RPM; a GitHub release-note failure does not hide those listings.
+
 ### Physical location and precise map pins
 
 Open **Manage → Precise Fleet Map pin** to enter a label, latitude (-90 to 90)

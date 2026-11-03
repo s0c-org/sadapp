@@ -14,6 +14,12 @@ must run on the device; a network discovery result cannot install it remotely.
 4. Provide the invitation token to the installer when prompted. It is written to the local protected configuration and should not be copied into support messages.
 5. Confirm the service is active and that the server's last-seen time advances.
 
+The installation page lists APT and RPM package versions separately from GitHub
+release notes. Stable and canary are repository channels; prerelease files are
+separate assets, not an alias for a stable package. Manual APT/DNF installation
+still requires enrollment. Listed checksums describe published metadata: verify
+downloaded files before manual installation, and let APT/DNF check signatures.
+
 The Agent makes outbound requests to the control plane; it does not require an inbound listener on the monitored host.
 
 If staff force a credential reset during a time-bound, audited support investigation, the current Agent key stops working immediately. A server administrator can retrieve the replacement invitation under **Server settings → Access** and re-run the installer on the host to enroll it again. The invitation token is never shown to staff; do not send it in a support ticket.
