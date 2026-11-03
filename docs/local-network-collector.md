@@ -60,6 +60,22 @@ Profiles marked **Experimental** can be selected manually, but are not considere
 
 ## Task recovery
 
+### Multi-collector site pools
+
+Collectors with the same owner and `siteKey` share eligible work; overlapping pools
+require task affinity. Stable affinity chooses a capable preferred collector with
+available capacity. A fresh active preferred collector keeps its work; alternate
+collectors can take over when it is stale, disabled, draining or missing.
+Task claims use guarded leases so simultaneous claims have only one winner.
+Expired leases may be reclaimed within the attempt limit, provided capabilities,
+credentials and target policy still allow execution.
+
+This is not instant failover, exactly-once execution or an availability SLA.
+Heartbeat freshness and lease expiry control takeover timing. Pool members must
+reach the same targets; a shared site key does not connect separate networks.
+Draining stops new claims while current leases may finish. Shared pending counts
+are visible on multiple collectors and must not be summed.
+
 Open a collector's activity to inspect recent tasks. A failed discovery can be retried from its task row; retry creates a new task using the saved scan parameters and checks the collector's current CIDR policy.
 
 ## Collector workspace and live queues

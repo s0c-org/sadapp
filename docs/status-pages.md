@@ -23,7 +23,10 @@ The header distinguishes Draft, Live, Suspended, saving and unsaved states.
 Draft pages offer **Review & publish**, which opens Settings without publishing.
 Live pages explicitly warn that saved edits immediately affect visitors.
 
-Use **Add card** to open the searchable source-grouped library. Descriptions explain
+The workspace opens with a persistent searchable library beside the page canvas on
+desktop. Collapse **Add widget** for more canvas space; **Add card** reopens it and
+focuses search. On narrower screens the library stacks above the canvas and the
+selected inspector. Descriptions explain
 what each card shows; an empty search offers **Clear card filters**. Adding or duplicating
 a card opens its inspector automatically. The **Page outline** selects cards by their
 custom heading without searching a long canvas. Selected cards are highlighted.
