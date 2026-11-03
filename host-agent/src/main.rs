@@ -28,7 +28,13 @@ use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
 mod windows;
 mod windows_config;
 #[cfg(windows)]
+mod windows_events;
+#[cfg(windows)]
 mod windows_gpu;
+#[cfg(windows)]
+mod windows_inventory;
+#[cfg(windows)]
+mod windows_ports;
 
 const DEFAULT_ENDPOINT: &str = "https://sadapp.org/api/v1/agent";
 #[cfg(not(windows))]
@@ -134,12 +140,7 @@ impl CollectorHealth {
         available: bool,
         unavailable_message: Option<&str>,
     ) -> Self {
-        if cfg!(windows)
-            && matches!(
-                name,
-                "ports" | "sensors" | "docker" | "virtualization" | "logs" | "smart" | "packages"
-            )
-        {
+        if cfg!(windows) && matches!(name, "sensors" | "docker" | "virtualization") {
             return Self::unsupported(
                 name,
                 interval_seconds,
@@ -611,7 +612,7 @@ struct VirtualGuestMetric {
     tags: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct LogEvent {
     timestamp: u64,
     source: String,
@@ -971,7 +972,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         if args.iter().any(|arg| {
             matches!(
                 arg.as_str(),
-                "--service" | "--configure" | "--validate-config" | "--purge-state"
+                "--service"
+                    | "--update-inventory-service"
+                    | "--setup"
+                    | "--configure"
+                    | "--validate-config"
+                    | "--validate-service"
+                    | "--purge-state"
             )
         }) {
             if args.len() != 1 {
@@ -979,6 +986,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             return match args[0].as_str() {
                 "--service" => windows::run_service(),
+                "--update-inventory-service" => windows::run_inventory_service(),
+                "--setup" => windows::setup(),
                 "--configure" => windows::configure(),
                 "--validate-config" => {
                     windows::load_config()?;
@@ -987,6 +996,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     );
                     Ok(())
                 }
+                "--validate-service" => windows::validate_service(),
                 "--purge-state" => windows::purge_state(),
                 _ => unreachable!(),
             };
@@ -2134,10 +2144,8 @@ fn collect_hwmon_sensors() -> (Vec<TemperatureSensor>, Vec<FanSensor>) {
     (temperatures, fans)
 }
 
+#[cfg(not(windows))]
 fn collect_listening_ports() -> Vec<ListeningPort> {
-    if cfg!(windows) {
-        return Vec::new();
-    }
     let mut ports = Vec::new();
     for (protocol, path, listening_state) in [
         ("tcp", "/proc/net/tcp", "0A"),
@@ -2230,9 +2238,23 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
     let process_health =
         CollectorHealth::completed("processes", process_started, interval_seconds, true, None);
     let ports_started = Instant::now();
-    let listening_ports = collect_listening_ports();
-    let ports_health =
-        CollectorHealth::completed("ports", ports_started, interval_seconds, true, None);
+    #[cfg(not(windows))]
+    let (listening_ports, ports_error) = (collect_listening_ports(), None::<String>);
+    #[cfg(windows)]
+    let (listening_ports, ports_error) = match windows_ports::collect() {
+        Ok(ports) => (ports, None),
+        Err(error) => {
+            windows::write_log(&format!("Port collection failed: {error}"));
+            (Vec::new(), Some(error.to_string()))
+        }
+    };
+    let ports_health = CollectorHealth::completed(
+        "ports",
+        ports_started,
+        interval_seconds,
+        ports_error.is_none(),
+        ports_error.as_deref(),
+    );
     let sensors_started = Instant::now();
     let (temperature_sensors, fan_sensors) = collect_hwmon_sensors();
     let sensors_health =
@@ -2267,9 +2289,28 @@ fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
         Some("Proxmox guest API unavailable"),
     );
     let logs_started = Instant::now();
-    let log_events = collect_log_events(80);
-    let logs_health =
-        CollectorHealth::completed("logs", logs_started, interval_seconds, true, None);
+    #[cfg(not(windows))]
+    let (log_events, logs_error) = (collect_log_events(80), None::<String>);
+    #[cfg(windows)]
+    let (log_events, logs_error) = match windows_events::collect(80) {
+        Ok((events, warning)) => {
+            if let Some(warning) = &warning {
+                windows::write_log(warning);
+            }
+            (events, warning)
+        }
+        Err(error) => {
+            windows::write_log(&format!("Event Log collection failed: {error}"));
+            (Vec::new(), Some(error.to_string()))
+        }
+    };
+    let logs_health = CollectorHealth::completed(
+        "logs",
+        logs_started,
+        interval_seconds,
+        logs_error.is_none(),
+        logs_error.as_deref(),
+    );
     MediumCollectorSnapshot {
         collected_at: unix_timestamp(),
         disk_total_bytes: disk_devices.iter().map(|disk| disk.total_bytes).sum(),
@@ -2325,22 +2366,51 @@ fn collect_slow_snapshot(
 ) -> SlowCollectorSnapshot {
     let now = unix_timestamp();
     let smart_started = Instant::now();
-    let smartctl = collect_smartctl_metrics();
+    #[cfg(not(windows))]
+    let (smartctl, smart_error) = (collect_smartctl_metrics(), None::<String>);
+    #[cfg(windows)]
+    let (smartctl, smart_error) = match windows_inventory::smart() {
+        Ok((metrics, warning)) => {
+            if let Some(warning) = &warning {
+                windows::write_log(warning);
+            }
+            (Some(metrics), warning)
+        }
+        Err(error) => {
+            windows::write_log(&format!("SMART collection unavailable: {error}"));
+            (None, Some(error.to_string()))
+        }
+    };
     let smart_health = CollectorHealth::completed(
         "smart",
         smart_started,
         interval_seconds,
-        smartctl.is_some(),
-        Some("smartctl unavailable"),
+        smartctl.is_some() && smart_error.is_none(),
+        smart_error.as_deref().or(Some("smartctl unavailable")),
     );
     let packages_started = Instant::now();
-    let update_status = collect_update_status(now, host_name, update_lifecycle);
+    #[cfg(not(windows))]
+    let (update_status, packages_error) = (
+        collect_update_status(now, host_name, update_lifecycle),
+        None::<String>,
+    );
+    #[cfg(windows)]
+    let (update_status, packages_error) =
+        match windows_inventory::updates(now, host_name, update_lifecycle) {
+            Ok(status) => (Some(status), None),
+            Err(error) => {
+                windows::write_log(&format!("Windows Update inventory unavailable: {error}"));
+                (None, Some(error.to_string()))
+            }
+        };
     let packages_health = CollectorHealth::completed(
         "packages",
         packages_started,
         interval_seconds,
         update_status.is_some(),
-        Some("supported package manager unavailable"),
+        packages_error
+            .as_deref()
+            .or(Some("supported package manager unavailable")),
     );
     SlowCollectorSnapshot {
         smartctl,
@@ -2349,6 +2419,7 @@ fn collect_slow_snapshot(
     }
 }
 
+#[cfg(not(windows))]
 fn collect_smartctl_metrics() -> Option<Value> {
     let scan_output = Command::new("smartctl")
         .args(["--scan-open", "-j"])
@@ -2937,22 +3008,8 @@ mod tests {
             false,
             Some("smartctl unavailable"),
         );
-        assert_eq!(
-            health.status,
-            if cfg!(windows) {
-                "unsupported"
-            } else {
-                "unavailable"
-            }
-        );
-        assert_eq!(
-            health.last_error.as_deref(),
-            Some(if cfg!(windows) {
-                "Not supported by the Windows prototype"
-            } else {
-                "smartctl unavailable"
-            })
-        );
+        assert_eq!(health.status, "unavailable");
+        assert_eq!(health.last_error.as_deref(), Some("smartctl unavailable"));
         assert_eq!(health.interval_seconds, 3600);
     }
 
@@ -3037,7 +3094,26 @@ mod tests {
             unix_timestamp(),
         );
         let medium = collect_medium_snapshot(120);
-        let slow = collect_slow_snapshot(&inventory.host_name, &update, 3600);
+        let slow = SlowCollectorSnapshot {
+            smartctl: None,
+            update_status: None,
+            health: vec![
+                CollectorHealth::completed(
+                    "smart",
+                    Instant::now(),
+                    3600,
+                    false,
+                    Some("fixture: optional tool unavailable"),
+                ),
+                CollectorHealth::completed(
+                    "packages",
+                    Instant::now(),
+                    3600,
+                    false,
+                    Some("fixture: cached inventory unavailable"),
+                ),
+            ],
+        };
         let status = gather_status(
             &mut sys,
             &inventory,
@@ -3064,15 +3140,7 @@ mod tests {
             value["agent_health"]["update"]["verification_mode"],
             "external_authenticode_check_required"
         );
-        for name in [
-            "ports",
-            "sensors",
-            "docker",
-            "virtualization",
-            "logs",
-            "smart",
-            "packages",
-        ] {
+        for name in ["sensors", "docker", "virtualization"] {
             let collector = value["agent_health"]["collectors"]
                 .as_array()
                 .unwrap()
@@ -3088,6 +3156,17 @@ mod tests {
             .find(|collector| collector["name"] == "gpu")
             .unwrap();
         assert_ne!(gpu["status"], "unsupported");
+        for name in ["ports", "logs", "smart", "packages"] {
+            assert_ne!(
+                value["agent_health"]["collectors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|collector| collector["name"] == name)
+                    .unwrap()["status"],
+                "unsupported"
+            );
+        }
         assert!(value["memory_total_bytes"].as_u64().unwrap() > 0);
         assert!(value["cpu_count"].as_u64().unwrap() > 0);
     }
@@ -3749,10 +3828,8 @@ fn normalize_agent_endpoint(endpoint: &str) -> String {
     without_query.trim_end_matches('/').to_string()
 }
 
+#[cfg(not(windows))]
 fn collect_log_events(max_events: usize) -> Vec<LogEvent> {
-    if cfg!(windows) {
-        return Vec::new();
-    }
     let mut events = collect_journal_events(max_events);
     let remaining = max_events.saturating_sub(events.len());
     if remaining > 0 {
@@ -3963,14 +4040,12 @@ fn make_fingerprint(source: &str, message: &str) -> String {
     format!("{}:{}", source, compact_message)
 }
 
+#[cfg(not(windows))]
 fn collect_update_status(
     now_ts: u64,
     host_name: &str,
     lifecycle: &UpdateLifecycleState,
 ) -> Option<UpdateStatusPayload> {
-    if cfg!(windows) {
-        return None;
-    }
     let package_manager = detect_package_manager()?;
     let (pending_updates, pending_security_updates, sample_packages) =
         match package_manager.as_str() {
@@ -4345,6 +4420,9 @@ fn send_log_events(
         .send()
         .map_err(reqwest::Error::without_url)?;
     if response.status().is_success() {
+        #[cfg(windows)]
+        windows_events::acknowledge(events)?;
+        #[cfg(not(windows))]
         commit_journal_cursor(events);
         log_message(
             configured_log_level,

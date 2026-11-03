@@ -42,6 +42,7 @@ function Invoke-WixBuild {
 
     & wix build `
         -arch x64 `
+        -ext WixToolset.Util.wixext `
         -d "ProductVersion=$PackageVersion" `
         -d "AgentExe=$script:SignedAgentExe" `
         -o $Destination `

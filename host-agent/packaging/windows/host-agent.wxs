@@ -1,4 +1,4 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package
     Name="Sadapp Host Agent"
     Manufacturer="Sadapp"
@@ -14,11 +14,24 @@
       <ComponentRef Id="HostAgentService" />
     </Feature>
 
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="SadappProgramMenuFolder" Name="Sadapp" />
+    </StandardDirectory>
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="SadappFolder" Name="Sadapp">
         <Directory Id="INSTALLFOLDER" Name="HostAgent">
           <Component Id="HostAgentService" Guid="e20b49ef-fb12-4c14-87b0-616651a8ca0f">
-            <File Id="HostAgentExecutable" Source="$(var.AgentExe)" KeyPath="yes" />
+            <File Id="HostAgentExecutable" Source="$(var.AgentExe)" KeyPath="yes">
+              <Shortcut Id="HostAgentSetupShortcut"
+                Directory="SadappProgramMenuFolder"
+                Name="Set up Sadapp Host Agent"
+                Description="Enroll this computer and start the Sadapp Host Agent service."
+                Arguments="--setup"
+                WorkingDirectory="INSTALLFOLDER"
+                Advertise="no" />
+            </File>
+            <RemoveFolder Id="RemoveSadappProgramMenuFolder" Directory="SadappProgramMenuFolder" On="uninstall" />
             <ServiceInstall
               Id="HostAgentServiceInstall"
               Name="SadappHostAgent"
@@ -29,11 +42,38 @@
               ErrorControl="normal"
               Account="NT AUTHORITY\LocalService"
               Arguments="--service">
-              <ServiceConfig OnInstall="yes" OnReinstall="yes" DelayedAutoStart="yes" ServiceSid="unrestricted" />
+              <ServiceConfig OnInstall="yes" OnReinstall="yes" DelayedAutoStart="yes" ServiceSid="unrestricted"
+                FailureActionsWhen="failedToStopOrReturnedError" />
+              <util:ServiceConfig FirstFailureActionType="restart"
+                SecondFailureActionType="restart" ThirdFailureActionType="none"
+                RestartServiceDelayInSeconds="15" ResetPeriodInDays="1" />
             </ServiceInstall>
             <ServiceControl
               Id="HostAgentServiceControl"
               Name="SadappHostAgent"
+              Stop="both"
+              Remove="uninstall"
+              Wait="yes" />
+            <ServiceInstall
+              Id="HostAgentInventoryServiceInstall"
+              Name="SadappHostAgentInventory"
+              DisplayName="Sadapp Read-Only Host Inventory"
+              Description="Reads cached Windows Update applicability and optional SMART into a protected local snapshot. No enrollment, telemetry, downloads or update installation."
+              Type="ownProcess"
+              Start="auto"
+              ErrorControl="normal"
+              Account="LocalSystem"
+              Arguments="--update-inventory-service">
+              <ServiceConfig OnInstall="yes" OnReinstall="yes"
+                FailureActionsWhen="failedToStopOrReturnedError" />
+              <util:ServiceConfig FirstFailureActionType="restart"
+                SecondFailureActionType="restart" ThirdFailureActionType="none"
+                RestartServiceDelayInSeconds="15" ResetPeriodInDays="1" />
+            </ServiceInstall>
+            <ServiceControl
+              Id="HostAgentInventoryServiceControl"
+              Name="SadappHostAgentInventory"
+              Start="install"
               Stop="both"
               Remove="uninstall"
               Wait="yes" />

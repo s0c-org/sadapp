@@ -44,8 +44,10 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $serviceName = 'SadappHostAgent'
+$inventoryServiceName = 'SadappHostAgentInventory'
 $installDirectory = Join-Path $env:ProgramFiles 'Sadapp\HostAgent'
 $installedExe = Join-Path $installDirectory 'sadapp-host-agent.exe'
+$setupShortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Sadapp\Set up Sadapp Host Agent.lnk'
 $null = Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -94,6 +96,8 @@ $configPath = Join-Path $dataDirectory 'config.dpapi'
 $stateDirectory = Join-Path $dataDirectory 'state'
 $queuePath = Join-Path $stateDirectory 'telemetry-queue.json'
 $updateStatePath = Join-Path $stateDirectory 'update-state.json'
+$eventLogStatePath = Join-Path $stateDirectory 'event-log-state.json'
+$inventoryCachePath = Join-Path $dataDirectory 'windows-update-inventory.json'
 $logPath = Join-Path $stateDirectory 'agent.log'
 $sentinelPath = Join-Path $stateDirectory 'unrecognized-test-state.txt'
 $expectedSids = @('S-1-5-18', 'S-1-5-32-544')
@@ -117,6 +121,9 @@ $testUser = 'SadappMsiAclTest'
 $testUserCreated = $false
 $installed = $false
 $installedMsiPath = $MsiPath
+$diagnosticsRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+$diagnosticsDirectory = Join-Path $diagnosticsRoot "sadapp-msi-$PID"
+$null = New-Item -ItemType Directory -Path $diagnosticsDirectory
 
 $null = Add-Type -TypeDefinition @'
 using System;
@@ -599,6 +606,8 @@ try {
         'Refusing to run on a machine with pre-existing Sadapp Host Agent state.'
     Assert-Condition ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -eq $null) `
         'Refusing to run on a machine with a pre-existing SadappHostAgent service.'
+    Assert-Condition ((Get-Service -Name $inventoryServiceName -ErrorAction SilentlyContinue) -eq $null) `
+        'Refusing to run on a machine with a pre-existing inventory helper service.'
     Assert-ChecksumManifest -Sums $ChecksumPath
 
     $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
@@ -622,14 +631,24 @@ try {
             "Unexpected Authenticode signer or invalid signature on $signedFile."
     }
 
+    $installLog = Join-Path $diagnosticsDirectory 'install.log'
     $installer = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" `
-        -ArgumentList @('/i', "`"$MsiPath`"", '/qn', '/norestart') -Wait -PassThru
+        -ArgumentList @('/i', "`"$MsiPath`"", '/qn', '/norestart', '/l*v', "`"$installLog`"") -Wait -PassThru
     if ($installer.ExitCode -notin @(0, 3010)) {
+        Select-String -LiteralPath $installLog -Pattern 'Return value 3|Error [0-9]{3,}' -Context 12, 3 |
+            Select-Object -First 8 | ForEach-Object { Write-Output $_ }
         throw "Initial MSI install failed with exit code $($installer.ExitCode)."
     }
     $installed = $true
     Assert-Condition (Test-Path -LiteralPath $installedExe) 'The MSI did not install the agent executable.'
     Assert-InstalledExecutable
+    Assert-Condition (Test-Path -LiteralPath $setupShortcut -PathType Leaf) 'The MSI did not install the guided setup shortcut.'
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($setupShortcut)
+    Assert-Condition ($shortcut.TargetPath -eq $installedExe -and $shortcut.Arguments -eq '--setup') `
+        'The setup shortcut must launch the installed agent without credentials.'
+    & $installedExe --validate-service
+    if ($LASTEXITCODE -ne 0) { throw 'The installed service recovery policy is invalid.' }
     $resolvedServiceSid = ([Security.Principal.NTAccount]::new('NT SERVICE\SadappHostAgent')).Translate(
         [Security.Principal.SecurityIdentifier]
     ).Value
@@ -639,6 +658,12 @@ try {
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     Assert-Condition ($null -ne $service) 'The MSI did not register SadappHostAgent.'
     Assert-Condition ($service.StartName -eq 'NT AUTHORITY\LocalService') "Unexpected service account: $($service.StartName)."
+    $inventoryService = Get-CimInstance Win32_Service -Filter "Name='$inventoryServiceName'"
+    Assert-Condition ($null -ne $inventoryService -and $inventoryService.StartName -eq 'LocalSystem') `
+        'The separate read-only inventory helper must run as LocalSystem.'
+    Assert-Condition ($inventoryService.PathName -match '(?i)sadapp-host-agent\.exe.*--update-inventory-service') `
+        'The privileged helper must use the dedicated inventory entrypoint, never the main agent.'
+    (Get-Service -Name $inventoryServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
     Assert-Condition ($service.StartMode -eq 'Auto') "Expected automatic service startup, got $($service.StartMode)."
     Assert-Condition ($service.PathName -match '(?i)sadapp-host-agent\.exe.*--service') `
         "Unexpected service executable or arguments: $($service.PathName)."
@@ -664,10 +689,13 @@ try {
 
     $endpoint = 'https://127.0.0.1:1/api/v1/agent'
     $token = 'ci-synthetic-enrollment-token-never-for-a-real-account'
-    @($endpoint, $token) | & $installedExe --configure
+    $setupOutput = @(@($endpoint, $token, 'n') | & $installedExe --setup)
     if ($LASTEXITCODE -ne 0) {
-        throw "Agent --configure failed with exit code $LASTEXITCODE."
+        throw "Agent --setup failed with exit code $LASTEXITCODE."
     }
+    Assert-Condition (($setupOutput -join "`n") -notmatch [regex]::Escape($token)) 'Guided setup exposed the invitation token.'
+    Assert-Condition ((Get-Service -Name $serviceName).Status -eq [System.ServiceProcess.ServiceControllerStatus]::Stopped) `
+        'Setup must respect declining service startup.'
     Assert-Condition (Test-Path -LiteralPath $configPath) 'Enrollment did not create the DPAPI config file.'
     & $installedExe --validate-config
     if ($LASTEXITCODE -ne 0) {
@@ -704,7 +732,8 @@ try {
     }
     Assert-ConfigAcl
     $configHashBeforeUpgrade = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
-    Start-Service -Name $serviceName
+    @('n', 'y') | & $installedExe --setup
+    if ($LASTEXITCODE -ne 0) { throw 'Guided setup failed to reuse enrollment and start the service.' }
     (Get-Service -Name $serviceName).WaitForStatus(
         [System.ServiceProcess.ServiceControllerStatus]::Running,
         [TimeSpan]::FromSeconds(30)
@@ -713,6 +742,19 @@ try {
     Assert-Condition ($runningService.ProcessId -gt 0) 'The running service has no process ID.'
     Assert-Condition ([SadappServiceTokenInspector]::HasEnabledGroup($runningService.ProcessId, $serviceSid)) `
         "The running service process token does not contain enabled SID $serviceSid."
+    @('n') | & $installedExe --setup
+    if ($LASTEXITCODE -ne 0) { throw 'Guided setup failed with an already-running service.' }
+    Assert-Condition ((Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -eq $configHashBeforeUpgrade) `
+        'Guided setup changed enrollment after the user chose to keep it.'
+    $crashedProcessId = $runningService.ProcessId
+    Stop-Process -Id $runningService.ProcessId -Force
+    $recoveryDeadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 250
+        $runningService = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+    } while (($runningService.State -ne 'Running' -or $runningService.ProcessId -eq $crashedProcessId) -and (Get-Date) -lt $recoveryDeadline)
+    Assert-Condition ($runningService.State -eq 'Running' -and $runningService.ProcessId -gt 0 -and
+        $runningService.ProcessId -ne $crashedProcessId) 'SCM did not restart the crashed agent within 30 seconds.'
     $queueDeadline = (Get-Date).AddSeconds(30)
     while (-not (Test-Path -LiteralPath $queuePath -PathType Leaf) -and (Get-Date) -lt $queueDeadline) {
         Start-Sleep -Seconds 1
@@ -728,6 +770,47 @@ try {
         Assert-StateFileAcl -Path $updateStatePath
     }
     Assert-StateFileAcl -Path $queuePath
+    $collectorDeadline = (Get-Date).AddSeconds(60)
+    do {
+        $collectorQueue = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+        $latestCollectors = @($collectorQueue.items)[-1].payload.agent_health.collectors
+        $collected = @($latestCollectors | Where-Object { $_.name -in @('ports', 'logs') })
+        if ($collected.Count -eq 2) { break }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $collectorDeadline)
+    Assert-Condition (Test-Path -LiteralPath $eventLogStatePath -PathType Leaf) `
+        'The LocalService collector did not persist its Event Log delivery state.'
+    Assert-StateFileAcl -Path $eventLogStatePath
+    foreach ($collectorName in @('ports', 'logs')) {
+        $collector = @($latestCollectors | Where-Object name -eq $collectorName)
+        Assert-Condition ($collector.Count -eq 1 -and $collector[0].status -eq 'healthy') `
+            "The $collectorName collector did not run successfully as LocalService: $($collector | ConvertTo-Json -Compress)"
+    }
+    $slowDeadline = (Get-Date).AddSeconds(150)
+    do {
+        $collectorQueue = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+        $slowCollectors = @(@($collectorQueue.items)[-1].payload.agent_health.collectors |
+            Where-Object { $_.name -in @('smart', 'packages') })
+        if ($slowCollectors.Count -eq 2) { break }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $slowDeadline)
+    Assert-Condition ($slowCollectors.Count -eq 2) 'The bounded slow collectors did not complete as LocalService.'
+    foreach ($collector in $slowCollectors) {
+        Assert-Condition ($collector.status -in @('healthy', 'unavailable')) `
+            "The $($collector.name) collector was not implemented: $($collector.status)"
+        if ($collector.status -eq 'unavailable') {
+            Assert-Condition (-not [string]::IsNullOrWhiteSpace($collector.last_error)) `
+                "The $($collector.name) collector hid its unavailability reason."
+        }
+        Write-Output "LocalService $($collector.name): $($collector.status) $($collector.last_error)"
+    }
+    $packages = @($slowCollectors | Where-Object name -eq 'packages')
+    Assert-Condition ($packages.Count -eq 1 -and $packages[0].status -eq 'healthy') `
+        'LocalService did not receive usable Windows Update inventory from the protected helper.'
+    Assert-ReadOnlyServiceAcl -Path $inventoryCachePath
+    $inventorySnapshot = Get-Content -LiteralPath $inventoryCachePath -Raw | ConvertFrom-Json
+    Assert-Condition ($null -ne $inventorySnapshot.inventory -and $null -eq $inventorySnapshot.error) `
+        'The privileged helper failed to obtain real cached Windows Update applicability.'
     Assert-UserCannotReadConfig
     Assert-PlainLocalServiceCannotAccessAgentData
     [IO.File]::WriteAllText($sentinelPath, 'This unrecognized file must survive the known-files-only purge.')
@@ -759,7 +842,11 @@ try {
         $statePath = Join-Path $dataDirectory $relativePath
         Assert-Condition (Test-Path -LiteralPath $statePath -PathType Leaf) `
             "The MSI upgrade removed application state: $relativePath."
-        Assert-StateFileAcl -Path $statePath
+        if ($statePath -eq $inventoryCachePath) {
+            Assert-ReadOnlyServiceAcl -Path $statePath
+        } else {
+            Assert-StateFileAcl -Path $statePath
+        }
     }
     Assert-ConfigAcl
     Assert-ReadOnlyServiceAcl -Path $sadappDirectory -Directory
@@ -782,13 +869,39 @@ try {
         [System.ServiceProcess.ServiceControllerStatus]::Stopped,
         [TimeSpan]::FromSeconds(30)
     )
+    Start-Sleep -Seconds 16
+    Assert-Condition ((Get-Service -Name $serviceName).Status -eq [System.ServiceProcess.ServiceControllerStatus]::Stopped) `
+        'A deliberate service stop must not trigger crash recovery.'
+    $configHashBeforeRepair = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
+    $queueHashBeforeRepair = (Get-FileHash -LiteralPath $queuePath -Algorithm SHA256).Hash
+    Remove-Item -LiteralPath $setupShortcut
+    & sc.exe failure $serviceName reset= 0 actions= restart/1000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not change the test service recovery policy before repair.' }
+    & $installedExe --validate-service *> $null
+    Assert-Condition ($LASTEXITCODE -ne 0) 'Service validation accepted an incorrect recovery policy.'
+    $repairLog = Join-Path $diagnosticsDirectory 'repair.log'
+    $repair = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" `
+        -ArgumentList @('/famus', "`"$installedMsiPath`"", '/qn', '/norestart', '/l*v', "`"$repairLog`"") -Wait -PassThru
+    if ($repair.ExitCode -notin @(0, 3010)) { throw "MSI repair failed with exit code $($repair.ExitCode)." }
+    Assert-InstalledExecutable
+    Assert-Condition (Test-Path -LiteralPath $setupShortcut -PathType Leaf) 'MSI repair did not restore the setup shortcut.'
+    & $installedExe --validate-service
+    if ($LASTEXITCODE -ne 0) { throw 'MSI repair did not retain the service recovery policy.' }
+    Assert-Condition ((Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -eq $configHashBeforeRepair -and
+        (Get-FileHash -LiteralPath $queuePath -Algorithm SHA256).Hash -eq $queueHashBeforeRepair) `
+        'MSI repair modified protected enrollment or queued telemetry.'
+    Assert-Condition ((Get-Service -Name $serviceName).Status -eq [System.ServiceProcess.ServiceControllerStatus]::Stopped) `
+        'Repair must not start a deliberately stopped service.'
     $queueHashBeforeUninstall = (Get-FileHash -LiteralPath $queuePath -Algorithm SHA256).Hash
     Invoke-MsiUninstall
     $installed = $false
 
     Assert-Condition ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -eq $null) `
         'MSI uninstall left the Windows service registered.'
+    Assert-Condition ((Get-Service -Name $inventoryServiceName -ErrorAction SilentlyContinue) -eq $null) `
+        'MSI uninstall left the privileged inventory helper registered.'
     Assert-Condition (-not (Test-Path -LiteralPath $installedExe)) 'MSI uninstall left the agent executable installed.'
+    Assert-Condition (-not (Test-Path -LiteralPath $setupShortcut)) 'MSI uninstall left the setup shortcut behind.'
     Assert-Condition (Test-Path -LiteralPath $configPath) 'MSI uninstall removed the protected enrollment config.'
     Assert-Condition (Test-Path -LiteralPath $queuePath) 'MSI uninstall removed the persisted telemetry queue.'
     Assert-Condition ((Get-FileHash -LiteralPath $queuePath -Algorithm SHA256).Hash -eq $queueHashBeforeUninstall) `
@@ -798,7 +911,11 @@ try {
         $statePath = Join-Path $dataDirectory $relativePath
         Assert-Condition (Test-Path -LiteralPath $statePath -PathType Leaf) `
             "MSI uninstall removed application state: $relativePath."
-        Assert-StateFileAcl -Path $statePath
+        if ($statePath -eq $inventoryCachePath) {
+            Assert-ReadOnlyServiceAcl -Path $statePath
+        } else {
+            Assert-StateFileAcl -Path $statePath
+        }
     }
     Assert-ConfigAcl
     Assert-ReadOnlyServiceAcl -Path $sadappDirectory -Directory
@@ -812,6 +929,8 @@ try {
     Assert-Condition (-not (Test-Path -LiteralPath $configPath)) 'Explicit state purge left the protected config behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $queuePath)) 'Explicit state purge left the telemetry queue behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $updateStatePath)) 'Explicit state purge left update state behind.'
+    Assert-Condition (-not (Test-Path -LiteralPath $eventLogStatePath)) 'Explicit state purge left Event Log delivery state behind.'
+    Assert-Condition (-not (Test-Path -LiteralPath $inventoryCachePath)) 'Explicit state purge left the Windows Update snapshot behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $logPath)) 'Explicit state purge left its known log behind.'
     Assert-Condition (Test-Path -LiteralPath $sentinelPath) 'Explicit state purge removed unrelated application state.'
     Remove-Item -LiteralPath $sentinelPath

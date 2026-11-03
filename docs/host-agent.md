@@ -45,7 +45,9 @@ can remain even after explicit certificate trust.
 
 The per-machine installer registers **SadappHostAgent** as an automatic, delayed-start
 Windows service under **LocalService**, with a dedicated service SID. Fresh installation
-does not start an unenrolled service. In an elevated PowerShell console, configure it:
+does not start an unenrolled service. Since 0.2.11, open **Start > Sadapp >
+Set up Sadapp Host Agent** for guided console enrollment and optional startup.
+For manual administration, use an elevated PowerShell console:
 
 ```powershell
 & "$env:ProgramFiles\Sadapp\HostAgent\sadapp-host-agent.exe" --configure
@@ -65,7 +67,7 @@ in Sadapp; a Running service alone does not prove that enrollment succeeded.
 Configuration is stored as machine-DPAPI ciphertext in
 `%ProgramData%\Sadapp\HostAgent\config.dpapi`. Administrators and SYSTEM have full access;
 the specific service SID can read the configuration but cannot replace it. Mutable
-telemetry queue, update state and logs live in the protected `state` subdirectory.
+telemetry queue, update state, Event Log delivery state and logs live in the protected `state` subdirectory.
 The service does not need LocalSystem, an inbound listener or a login session.
 Machine-DPAPI configuration is not a portable backup of enrollment credentials.
 
@@ -91,9 +93,37 @@ uninstalling. This command does not recursively delete the directory or unrelate
 It does not delete the server record from Sadapp.
 
 The prototype reports CPU, RAM, uptime, process and filesystem/network information
-available to LocalService. Protected-process details may be inaccessible. Ports, hardware
-sensors, GPU, SMART, Docker/Hyper-V guests, Windows Event Logs and Windows Update inventory
-are explicitly **unsupported** in this prototype, not healthy empty measurements.
+available to LocalService. Protected-process details may be inaccessible.
+NVIDIA/AMD GPU telemetry is available where driver sensors permit it.
+Version 0.2.12 adds TCP listeners/bound UDP endpoints for IPv4/IPv6 (up to 100)
+and System/Application Critical/Error/Warning events (up to 40 per channel per
+medium cycle). Event delivery persists a pending batch and acknowledged bookmarks;
+the first read looks back 15 minutes. Event source, original timestamp, severity
+and channel/event ID use the existing Logs view. Security and arbitrary custom
+Event Log channels are not collected. Access/query/state failures are reported
+in collector health; collection never changes channel permissions.
+Version 0.2.13 adds read-only **cached** Windows Update pending/security counts,
+up to 15 update titles, and reboot-required state. This does not perform an
+online scan, install/download updates or inventory third-party applications.
+The MSI installs a separate LocalSystem service (`SadappHostAgentInventory`)
+for the WUA query, since LocalService is denied access. That service has no
+enrollment, telemetry or request input: it writes only a protected hourly
+snapshot readable but not writable by the main LocalService monitoring service.
+Reports use the snapshot observation time; snapshots older than two hours and
+producer errors are rejected. The helper is stopped/removed by MSI lifecycle;
+its snapshot is retained on ordinary uninstall. Stop both services before
+explicit `--purge-state`.
+Cached applicability can be stale; denied/failed/incomplete queries and the
+60-second deadline report collector unavailability, never healthy zero counts.
+The same fixed read-only helper collects optional SMART using a separately installed standard
+`ProgramFiles\smartmontools\bin\smartctl.exe`, up to eight drives and five seconds
+per query. No self-tests, settings changes, elevation or intentional standby
+wakeup occur. LocalService is not granted physical-disk access; missing tools,
+permissions, unsupported storage and partial results are explicit health errors.
+Only device/model, health, temperature and sector-error summaries are uploaded;
+raw SMART payloads and serials are excluded. Target hardware acceptance is still required.
+Host hardware sensors, Intel GPU telemetry and Docker/Hyper-V guests remain
+unsupported, not healthy empty measurements.
 Linux load averages, CPU feature flags and VM-type detection are not asserted on Windows.
 Unsupported collectors remain visible without generating false stale-collector warnings.
 Update health requires an external Authenticode check; it does not claim the running

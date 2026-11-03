@@ -8,6 +8,7 @@ $scriptsDirectory = Join-Path $repoRoot 'host-agent\scripts\windows'
 $workflowPath = Join-Path $repoRoot '.github\workflows\host-agent-windows.yml'
 $wixPath = Join-Path $repoRoot 'host-agent\packaging\windows\host-agent.wxs'
 $readmePath = Join-Path $repoRoot 'host-agent\packaging\windows\README.md'
+$updateScriptPath = Join-Path $repoRoot 'host-agent\src\windows_update_inventory.ps1'
 
 function Assert-Static {
     param(
@@ -20,7 +21,7 @@ function Assert-Static {
     }
 }
 
-foreach ($file in Get-ChildItem -LiteralPath $scriptsDirectory -Filter '*.ps1' -File) {
+foreach ($file in @((Get-ChildItem -LiteralPath $scriptsDirectory -Filter '*.ps1' -File)) + @(Get-Item -LiteralPath $updateScriptPath)) {
     $tokens = $null
     $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -42,10 +43,16 @@ foreach ($file in Get-ChildItem -LiteralPath $scriptsDirectory -Filter '*.ps1' -
         }
     }
 }
+$updateScript = Get-Content -LiteralPath $updateScriptPath -Raw
+Assert-Static ($updateScript.Contains('$searcher.Online = $false') -and
+    -not $updateScript.Contains('CreateUpdateDownloader') -and
+    -not $updateScript.Contains('CreateUpdateInstaller')) `
+    'Windows Update inventory must remain cached/read-only with no downloader or installer.'
 
 [xml] $wix = Get-Content -LiteralPath $wixPath -Raw
 $namespace = [Xml.XmlNamespaceManager]::new($wix.NameTable)
 $namespace.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
+$namespace.AddNamespace('util', 'http://wixtoolset.org/schemas/v4/wxs/util')
 $service = $wix.SelectSingleNode('//w:ServiceInstall', $namespace)
 $serviceConfig = $service.SelectSingleNode('w:ServiceConfig', $namespace)
 $serviceControl = $wix.SelectSingleNode('//w:ServiceControl', $namespace)
@@ -56,10 +63,34 @@ Assert-Static ($service.GetAttribute('Account') -eq 'NT AUTHORITY\LocalService')
 Assert-Static ($service.GetAttribute('Arguments') -eq '--service') 'The service must be launched with --service.'
 Assert-Static ($serviceConfig.GetAttribute('DelayedAutoStart') -eq 'yes') 'The service must use delayed automatic startup.'
 Assert-Static ($serviceConfig.GetAttribute('ServiceSid') -eq 'unrestricted') 'The service SID must be unrestricted.'
+Assert-Static ($serviceConfig.GetAttribute('FailureActionsWhen') -eq 'failedToStopOrReturnedError') `
+    'Recovery must cover crashes and error exits, not normal stops.'
+$recovery = $service.SelectSingleNode('util:ServiceConfig', $namespace)
+Assert-Static ($null -ne $recovery -and $recovery.GetAttribute('ResetPeriodInDays') -eq '1' -and
+    $recovery.GetAttribute('RestartServiceDelayInSeconds') -eq '15' -and
+    $recovery.GetAttribute('FirstFailureActionType') -eq 'restart' -and
+    $recovery.GetAttribute('SecondFailureActionType') -eq 'restart' -and
+    $recovery.GetAttribute('ThirdFailureActionType') -eq 'none') `
+    'WiX Util must configure two 15-second retries followed by no action, reset after one day.'
+Assert-Static ($null -eq $service.SelectSingleNode('w:ServiceConfigFailureActions', $namespace)) `
+    'Do not use the broken MSI built-in failure-actions configuration path.'
+$shortcut = $wix.SelectSingleNode('//w:File[@Id="HostAgentExecutable"]/w:Shortcut', $namespace)
+Assert-Static ($null -ne $shortcut -and $shortcut.GetAttribute('Arguments') -eq '--setup' -and
+    $shortcut.GetAttribute('Directory') -eq 'SadappProgramMenuFolder') `
+    'The MSI must expose native guided setup in the Start menu without enrollment arguments.'
 Assert-Static ($serviceConfig.GetAttribute('OnInstall') -eq 'yes' -and
     $serviceConfig.GetAttribute('OnReinstall') -eq 'yes') `
     'MSI must apply the service configuration on installation and repair.'
 Assert-Static ($null -eq $serviceControl.GetAttributeNode('Start')) 'The MSI must not start a fresh unenrolled service.'
+$inventoryService = $wix.SelectSingleNode('//w:ServiceInstall[@Name="SadappHostAgentInventory"]', $namespace)
+Assert-Static ($null -ne $inventoryService -and
+    $inventoryService.GetAttribute('Account') -eq 'LocalSystem' -and
+    $inventoryService.GetAttribute('Arguments') -eq '--update-inventory-service') `
+    'Only the dedicated read-only Windows Update inventory service may run as LocalSystem.'
+$inventoryControl = $wix.SelectSingleNode('//w:ServiceControl[@Name="SadappHostAgentInventory"]', $namespace)
+Assert-Static ($null -ne $inventoryControl -and $inventoryControl.GetAttribute('Start') -eq 'install' -and
+    $inventoryControl.GetAttribute('Stop') -eq 'both' -and $inventoryControl.GetAttribute('Remove') -eq 'uninstall') `
+    'The read-only inventory service must start, stop and uninstall with the MSI.'
 Assert-Static ($serviceControl.GetAttribute('Stop') -eq 'both') 'The MSI must stop the service on install and uninstall.'
 Assert-Static ($serviceControl.GetAttribute('Remove') -eq 'uninstall') 'The MSI must remove the service on uninstall.'
 Assert-Static ($installDirectory.GetAttribute('Name') -eq 'HostAgent') 'The fixed installation directory must end in Sadapp\HostAgent.'
@@ -69,6 +100,9 @@ $installerScript = Get-Content -LiteralPath (Join-Path $scriptsDirectory 'Instal
 $smokeScript = Get-Content -LiteralPath (Join-Path $scriptsDirectory 'Test-Installer.ps1') -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $readme = Get-Content -LiteralPath $readmePath -Raw
+Assert-Static ($buildScript.Contains('-ext WixToolset.Util.wixext') -and
+    $workflow.Contains('extension add -g WixToolset.Util.wixext/5.0.2')) `
+    'The build and native acceptance must use the pinned WiX Util extension.'
 
 Assert-Static ($buildScript.Contains('sadapp-host-agent-$Version-windows-x64.msi')) 'The MSI filename must identify the version and Windows x64 architecture.'
 Assert-Static ($buildScript.Contains('prototype-signing.cer')) 'The public prototype certificate filename changed.'
@@ -103,6 +137,10 @@ Assert-Static ($smokeScript.Contains('$addedRootTrust = $true')) 'The smoke test
 Assert-Static ($smokeScript.Contains('if ($addedRootTrust -and $null -ne $importedCert)')) `
     'The smoke test must remove only root trust it added.'
 Assert-Static ($workflow.Contains('runs-on: windows-latest')) 'Native installer checks must run on Windows.'
+Assert-Static ($workflow.Contains("if (`$LASTEXITCODE -ne 0) { throw 'Native Windows tests failed.' }") -and
+    $workflow.Contains("if (`$LASTEXITCODE -ne 0) { throw 'Native Windows formatting failed.' }") -and
+    $workflow.Contains("if (`$LASTEXITCODE -ne 0) { throw 'Native Windows release build failed.' }")) `
+    'PowerShell must stop after each failed native Rust command rather than publish a success-shaped build.'
 Assert-Static ($workflow.Contains('Test-PackagingStatic.ps1')) 'The portable static tests must be wired into CI.'
 Assert-Static (-not $workflow.Contains('contents: write')) 'Prototype CI must not publish a release.'
 Assert-Static ($smokeScript.Contains('sc.exe showsid')) 'The smoke test must compare the SCM service SID.'
@@ -145,9 +183,13 @@ Assert-Static ($readme.Contains('Do not use this') -and $readme.Contains('produc
 
 Assert-Static ($buildScript.Contains('[switch] $Unsigned') -and
     $buildScript.Contains('Unsigned alpha builds cannot be combined with signing parameters.')) `
-    'The unsigned alpha mode must exist and refuse signing parameters.'
-Assert-Static ($workflow.Contains('-Unsigned') -and $workflow.Contains("-ne 'NotSigned'")) `
-    'CI must build and smoke-test the unsigned alpha MSI.'
+    'Explicit legacy unsigned builds must refuse signing parameters.'
+Assert-Static (-not $workflow.Contains('-Unsigned') -and -not $workflow.Contains('steps.alpha.outputs.output')) `
+    'Alpha downloads must reuse the signed, lifecycle-tested package rather than rebuilding an unsigned MSI.'
+Assert-Static ($smokeScript.Contains('--setup') -and $smokeScript.Contains('--validate-service') -and
+    $smokeScript.Contains('Stop-Process -Id $runningService.ProcessId') -and
+    $smokeScript.Contains("'/famus'")) `
+    'Native acceptance must cover guided setup, actual crash recovery and MSI repair.'
 Assert-Static ($readme.Contains('SmartScreen')) 'The alpha download instructions must explain the SmartScreen warning.'
 
 Write-Output 'Windows packaging static checks passed.'

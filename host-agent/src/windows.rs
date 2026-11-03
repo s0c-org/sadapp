@@ -12,7 +12,8 @@ use std::time::Duration;
 use windows_service::{
     define_windows_service,
     service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState,
+        ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
+        ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod, ServiceState,
         ServiceStatus, ServiceType,
     },
     service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle},
@@ -40,7 +41,9 @@ use windows_sys::Win32::{
 };
 
 pub const SERVICE_NAME: &str = "SadappHostAgent";
+pub const INVENTORY_SERVICE_NAME: &str = "SadappHostAgentInventory";
 static SERVICE_MODE: AtomicBool = AtomicBool::new(false);
+static INVENTORY_MODE: AtomicBool = AtomicBool::new(false);
 static LOG_FAILED: AtomicBool = AtomicBool::new(false);
 static LOG: OnceLock<std::sync::Mutex<std::fs::File>> = OnceLock::new();
 
@@ -200,7 +203,7 @@ pub fn atomic_write(path: &Path, data: &[u8], read_only_service: bool) -> io::Re
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        protect(&temporary, false)?;
+        protect(&temporary, read_only_service)?;
         file.write_all(data)?;
         file.sync_all()?;
         drop(file);
@@ -321,10 +324,14 @@ fn require_admin() -> io::Result<()> {
 }
 
 fn require_stopped() -> Result<(), Box<dyn std::error::Error>> {
+    require_named_service_stopped(SERVICE_NAME)
+}
+
+fn require_named_service_stopped(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    match manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS) {
+    match manager.open_service(name, ServiceAccess::QUERY_STATUS) {
         Ok(service) if service.query_status()?.current_state != ServiceState::Stopped => {
-            Err("Stop SadappHostAgent before changing or deleting its configuration".into())
+            Err(format!("Stop {name} before changing or deleting its configuration/state").into())
         }
         Ok(_) => Ok(()),
         Err(windows_service::Error::Winapi(error)) if error.raw_os_error() == Some(1060) => Ok(()),
@@ -411,16 +418,191 @@ pub fn configure() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn confirmation(label: &str, default: bool) -> io::Result<bool> {
+    loop {
+        let answer = prompt(label, false)?;
+        match answer.to_ascii_lowercase().as_str() {
+            "" => return Ok(default),
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => println!("Enter yes or no."),
+        }
+    }
+}
+
+fn wait_for_state(
+    service: &windows_service::service::Service,
+    expected: ServiceState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = service.query_status()?;
+        if status.current_state == expected {
+            return Ok(());
+        }
+        if expected == ServiceState::Running && status.current_state == ServiceState::Stopped {
+            return Err(format!(
+                "The service stopped during startup ({:?}). Inspect ProgramData\\Sadapp\\HostAgent\\state\\agent.log.",
+                status.exit_code
+            ).into());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "Timed out waiting for {expected:?}; the service is {:?}. Inspect the agent log and Windows Services.",
+                status.current_state
+            ).into());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn setup_service() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Sadapp Host Agent setup");
+    println!(
+        "Enrollment secrets are hidden and saved using machine DPAPI and service-specific ACLs."
+    );
+    println!(
+        "HTTPS certificate validation stays enabled; package signing does not change API trust."
+    );
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+    let service = manager.open_service(
+        SERVICE_NAME,
+        ServiceAccess::QUERY_STATUS | ServiceAccess::START | ServiceAccess::STOP,
+    )?;
+    let configured = match load_config() {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(format!(
+                "Existing enrollment cannot be validated: {error}. It has not been replaced. Use --configure from an elevated console after stopping the service to replace it explicitly."
+            ).into());
+        }
+    };
+    let replace =
+        !configured || confirmation("Existing enrollment found. Replace it? [y/N]: ", false)?;
+    if replace {
+        if service.query_status()?.current_state != ServiceState::Stopped {
+            if !confirmation("Stop the service to configure enrollment? [y/N]: ", false)? {
+                println!("Setup cancelled; enrollment was not changed.");
+                return Ok(());
+            }
+            service.stop()?;
+            wait_for_state(&service, ServiceState::Stopped)?;
+        }
+        configure()?;
+    } else {
+        println!("Keeping the existing protected enrollment.");
+    }
+    match service.query_status()?.current_state {
+        ServiceState::Running => println!("The service is already running."),
+        ServiceState::Stopped => {
+            if !confirmation("Start the Sadapp Host Agent service now? [Y/n]: ", true)? {
+                println!("Enrollment is saved; the service remains stopped.");
+                return Ok(());
+            }
+            service.start::<&str>(&[])?;
+            wait_for_state(&service, ServiceState::Running)?;
+            println!("The Sadapp Host Agent service is running.");
+        }
+        state => {
+            return Err(format!("The service is {state:?}; retry setup after it settles.").into());
+        }
+    }
+    println!(
+        "Service startup is not proof of enrollment. Confirm fresh telemetry in Sadapp; inspect the agent log if it does not appear."
+    );
+    Ok(())
+}
+
+pub fn setup() -> Result<(), Box<dyn std::error::Error>> {
+    match require_admin() {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            if !io::stdin().is_terminal() {
+                return Err(error.into());
+            }
+            use windows_sys::Win32::UI::Shell::{SHELLEXECUTEINFOW, ShellExecuteExW};
+            let executable = wide(std::env::current_exe()?.as_os_str());
+            let verb = wide(std::ffi::OsStr::new("runas"));
+            let arguments = wide(std::ffi::OsStr::new("--setup"));
+            let mut launch: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+            launch.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+            launch.lpVerb = verb.as_ptr();
+            launch.lpFile = executable.as_ptr();
+            launch.lpParameters = arguments.as_ptr();
+            launch.nShow = 1;
+            if unsafe { ShellExecuteExW(&mut launch) } == 0 {
+                return Err(io::Error::last_os_error().into());
+            }
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let result = setup_service();
+    if let Err(error) = &result {
+        eprintln!("Setup failed: {error}");
+    }
+    if io::stdin().is_terminal() {
+        prompt("Press Enter to close setup: ", false)?;
+    }
+    result
+}
+
+fn recovery_policy_matches(recovery: &ServiceFailureActions, recover_error_exits: bool) -> bool {
+    let expected = [
+        ServiceAction {
+            action_type: ServiceActionType::Restart,
+            delay: Duration::from_secs(15),
+        },
+        ServiceAction {
+            action_type: ServiceActionType::Restart,
+            delay: Duration::from_secs(15),
+        },
+        ServiceAction {
+            action_type: ServiceActionType::None,
+            delay: Duration::ZERO,
+        },
+    ];
+    recovery.reset_period == ServiceFailureResetPeriod::After(Duration::from_secs(86400))
+        && recovery.actions.as_ref().is_some_and(|actions| {
+            actions.len() == expected.len()
+                && actions.iter().zip(expected).all(|(actual, expected)| {
+                    actual.action_type == expected.action_type
+                        && (expected.action_type == ServiceActionType::None
+                            || actual.delay == expected.delay)
+                })
+        })
+        && recover_error_exits
+}
+
+pub fn validate_service() -> Result<(), Box<dyn std::error::Error>> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+    let service = manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_CONFIG)?;
+    if !recovery_policy_matches(
+        &service.get_failure_actions()?,
+        service.get_failure_actions_on_non_crash_failures()?,
+    ) {
+        return Err("Service recovery policy is not the expected bounded restart policy; repair the MSI installation.".into());
+    }
+    println!(
+        "Service recovery policy is valid: two restart attempts after 15 seconds each, then stop; reset after one day. Normal service stops do not trigger recovery."
+    );
+    Ok(())
+}
+
 pub fn purge_state() -> Result<(), Box<dyn std::error::Error>> {
     require_admin()?;
     require_stopped()?;
+    require_named_service_stopped(INVENTORY_SERVICE_NAME)?;
     let path = state_dir()?;
     reject_reparse(&path)?;
     // Delete only known agent-owned files; never recursively delete user-created contents.
     for name in [
         "config.dpapi",
+        "windows-update-inventory.json",
         "state/telemetry-queue.json",
         "state/update-state.json",
+        "state/event-log-state.json",
         "state/agent.log",
         "state/agent.log.old",
     ] {
@@ -480,6 +662,12 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub fn run_inventory_service() -> Result<(), Box<dyn std::error::Error>> {
+    INVENTORY_MODE.store(true, Ordering::Release);
+    service_dispatcher::start(INVENTORY_SERVICE_NAME, ffi_service_main)?;
+    Ok(())
+}
+
 define_windows_service!(ffi_service_main, service_main);
 
 fn status(state: ServiceState, exit_code: u32) -> ServiceStatus {
@@ -515,11 +703,17 @@ fn service_main(_args: Vec<OsString>) {
 }
 
 fn service_worker() -> Result<(), Box<dyn std::error::Error>> {
+    let inventory = INVENTORY_MODE.load(Ordering::Acquire);
+    let service_name = if inventory {
+        INVENTORY_SERVICE_NAME
+    } else {
+        SERVICE_NAME
+    };
     let shutdown = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&shutdown);
     let handle_cell = Arc::new(OnceLock::<ServiceStatusHandle>::new());
     let control_handle = Arc::clone(&handle_cell);
-    let handle = service_control_handler::register(SERVICE_NAME, move |event| match event {
+    let handle = service_control_handler::register(service_name, move |event| match event {
         ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
             signal.store(true, Ordering::Release);
             if let Some(handle) = control_handle.get()
@@ -538,6 +732,11 @@ fn service_worker() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "Service status handle already initialized")?;
     handle.set_service_status(status(ServiceState::StartPending, 0))?;
     let result = (|| {
+        if inventory {
+            prepare_state_dir()?;
+            handle.set_service_status(status(ServiceState::Running, 0))?;
+            return crate::windows_inventory::produce_snapshots(shutdown).map_err(Into::into);
+        }
         let path = state_dir()?;
         reject_reparse(&path)?;
         reject_reparse(&path.join("state"))?;
@@ -611,6 +810,40 @@ pub fn timezone() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_policy_requires_bounded_retries_and_error_exit_handling() {
+        let mut policy = ServiceFailureActions {
+            reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86400)),
+            reboot_msg: None,
+            command: None,
+            actions: Some(
+                [15, 15]
+                    .into_iter()
+                    .map(|seconds| ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(seconds),
+                    })
+                    .chain(std::iter::once(ServiceAction {
+                        action_type: ServiceActionType::None,
+                        delay: Duration::ZERO,
+                    }))
+                    .collect(),
+            ),
+        };
+        assert!(recovery_policy_matches(&policy, true));
+        assert!(!recovery_policy_matches(&policy, false));
+        policy.reset_period = ServiceFailureResetPeriod::Never;
+        assert!(!recovery_policy_matches(&policy, true));
+        policy.reset_period = ServiceFailureResetPeriod::After(Duration::from_secs(86400));
+        policy.actions.as_mut().unwrap()[0].delay = Duration::from_secs(1);
+        assert!(!recovery_policy_matches(&policy, true));
+        policy.actions.as_mut().unwrap()[0].delay = Duration::from_secs(15);
+        policy.actions.as_mut().unwrap().pop();
+        assert!(!recovery_policy_matches(&policy, true));
+        policy.actions = None;
+        assert!(!recovery_policy_matches(&policy, true));
+    }
 
     #[test]
     fn service_sid_derivation_matches_windows_trusted_installer_identity() {

@@ -20,6 +20,20 @@ Redirects are not followed; private-network webhook endpoints are not supported.
 
 Use notification history to distinguish queued, sent, retried, and failed deliveries. Provider rate limits, invalid credentials, unmatched routes, and disabled policies have different remedies. Avoid putting provider secrets in rule names or message bodies.
 
+Threshold alerts keep one open incident per server, policy gateway and condition
+(CPU, memory, temperature, fan, SMART or process count). Repeated readings and
+warning/critical fluctuations update that incident without another gateway
+notification. The incident retains its highest severity; acknowledging or dismissing
+it does not re-arm delivery while the condition still holds. Configured escalation
+and delivery retries remain separate.
+
+A healthy observation clears only its own condition, so memory recovery cannot
+close a CPU incident. Missing observations do not count as recovery. After recovery,
+a subsequent breach can create a new incident and notification. These lifecycle
+guards apply in on, shadow and off pipeline modes and serialize overlapping worker
+submissions. Identifiable duplicate alerts from older versions are consolidated
+when that condition is checked again; their delivery records remain in history.
+
 Manage message templates and routing under **Settings → Notifications**. For repeated failures, review the gateway test result, matching rule, and delivery record in that order.
 
 ### Overview

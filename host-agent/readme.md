@@ -7,7 +7,12 @@ The Windows prototype runs under LocalService with a dedicated service SID.
 See `packaging/windows/README.md` for self-signed MSI builds, explicit certificate
 trust, native CI validation and limitations. This is not a Store/WinGet release.
 
-After MSI installation, use an elevated PowerShell console:
+After MSI installation, open **Start > Sadapp > Set up Sadapp Host Agent**.
+The guided console wizard requests elevation, collects protected enrollment,
+and offers to start the service. Existing enrollment is kept by default.
+PowerShell is not required for this interactive path.
+
+For manual administration, use an elevated PowerShell console:
 
 ```powershell
 & "$env:ProgramFiles\Sadapp\HostAgent\sadapp-host-agent.exe" --configure
@@ -24,10 +29,31 @@ Mutable state lives under `%ProgramData%\Sadapp\HostAgent\state`; logs are bound
 and queue replacement is atomic. Stop the service before changing configuration
 or using `--purge-state`. Upgrades and ordinary uninstall retain protected data.
 
-The Windows prototype explicitly marks ports, sensors, Docker/virtualization,
-system logs, SMART and package-update collectors unsupported. It does not publish
+Windows 0.2.12 adds native TCP listeners/bound UDP endpoints (IPv4/IPv6, up to 100)
+and Critical/Error/Warning events from System and Application (up to 40 each per
+medium collection). Service-mode event delivery persists its pending batch and
+resumes acknowledged bookmarks; first collection uses a 15-minute lookback.
+Security and arbitrary custom Event Log channels are not collected.
+Windows 0.2.13 adds cached Windows Update pending/security inventory and reboot
+state, plus optional SMART through the standard ProgramFiles smartmontools
+installation. Both are read-only, bounded and run hourly. Update counts are cached,
+not a fresh online scan. The MSI installs a separate LocalSystem read-only Windows
+Update/SMART inventory service because WUA and raw disks deny LocalService access. Only a protected
+snapshot crosses to the monitoring service, which remains LocalService; the helper
+never loads enrollment or sends telemetry. Stop both services before explicit state
+purge. Missing tools and unsupported
+controllers are explicit collector errors; the service is never elevated for SMART.
+See [Windows capability limits](packaging/windows/README.md#windows-update-and-smart-0213).
+Sensors and Docker/virtualization remain unsupported. The agent does not publish
 Linux-only feature flags, VM type or load averages as Windows facts. Native Windows
 runtime tests are separate from a successful Linux-to-Windows cross-build.
+The MSI applies bounded crash/error recovery (two 15-second restart delays,
+then no further restart; reset after one failure-free day). Normal service stops
+are not restarted. `--validate-service` checks the installed recovery policy.
+Repair restores installed files and service settings without purging enrollment.
+Alpha and prototype artifacts reuse the same self-signed, lifecycle-tested MSI;
+self-signing does not establish publisher trust or change HTTPS validation.
+See the Windows packaging README for remaining parity and acceptance gates.
 
 Linux/manual console usage
 --------------------------
