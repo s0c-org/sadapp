@@ -33,4 +33,10 @@ Profiles marked **Experimental** are available for explicit manual selection but
 - Check version, community, username, auth/privacy protocols, and context against the device configuration.
 - Inspect the Server SNMP tab for last poll time/error and the collector task history for LNC jobs.
 
+Local Network Collector task results update the Server's last-poll status, including failed reads.
+Successful telemetry batches also populate the Server SNMP history used by hardware charts and
+availability. A recent successful poll does not imply that every CPU, memory, or storage OID is
+supported; unavailable readings remain empty. A rejected read is reported as a poll failure, not
+as a stopped scheduler.
+
 See [Local Network Collector](local-network-collector) for private-network polling and [Metrics and history](../inventory/metrics-and-history) for interpreting `n/a` values.

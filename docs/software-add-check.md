@@ -91,3 +91,19 @@ Leaving a modified form warns about unsaved changes. After creation, Software
 opens the new check's settings at `/software/monitor%3A<id>/settings`, where its
 configuration and lifecycle controls remain available. Creation schedules
 monitoring and is not proof of a successful check.
+
+In the service **Checks** tab, editors can pause or resume each linked monitor
+directly. **Configure → Enable monitoring** also saves the enable state together
+with target and executor changes. Pausing retains results and clears the next
+scheduled check; resuming schedules a fresh check, not a successful result.
+Adopting discovered hardware retains its discovering collector for ICMP when
+that collector is active and advertises ICMP support. Otherwise no ping is
+scheduled; it never falls back to legacy or public worker polling.
+Resuming an older private worker check automatically reuses the host's linked
+collector only when exactly one active, capable collector covers the target.
+If coverage is missing or ambiguous, select a suitable collector in Configure,
+select **Enable monitoring**, and save. Discovery alone and successful adoption
+do not prove check reachability. Paused checks remain paused until resumed.
+Public worker checks require a configured public target; only an actual
+successful result confirms reachability. Private targets cannot resume on public
+workers, including private IPv6 endpoints.
