@@ -5,6 +5,34 @@ The two registers answer different questions:
 - **Hardware** (`/hardware`) lists managed hosts and devices that can provide machine telemetry.
 - **Software** (`/software`) lists services, websites, and configured reachability checks grouped by host. Containers and virtual machines belong in Hardware.
 
+Hardware version badges compare Windows agents with published Windows MSI
+releases, not Linux package versions. A matching experimental installer is shown
+as **Current prerelease**, not a stable release. Unavailable Windows release
+metadata stays unknown and does not fall back to Linux. Linux agents and
+collectors retain package-revision comparisons; **Application version matches**
+means the reported application matches but its package revision is unverified.
+The Needs update filter uses the same platform-specific comparison as the badge.
+
+On **Health & logs**, incidents and update status stay visible. Secondary system
+readings are grouped under **System diagnostics**, initially collapsed unless
+reported temperature, SMART health, or primary filesystem capacity needs review.
+Collector details initially show **Needs attention**; choose **All** to inspect
+healthy and unsupported collectors. Runtime/configuration has its own disclosure,
+and recent events show five groups with an option to expand the list.
+
+On **Performance**, cores and network interfaces keep their individual sample
+timestamps. An observation from another interface does not create a gap in an
+otherwise continuous series. Actual null readings and counter resets still break
+the line, including during downsampling. Missing per-core data remains unavailable,
+not inferred from total CPU.
+CPU, memory, workload I/O and storage trends also retain reported gaps. Storage
+volumes use their own timestamps, and utilization is unavailable where a matching
+capacity reading is missing rather than connecting across that observation.
+For hosts with more than eight interfaces, charts initially focus on host links
+when identifiable, excluding loopback and common virtual guest links. **Interface
+view** can show all reported interfaces or isolate one link in both RX/TX charts;
+the selector does not alter or aggregate recorded counters.
+
 Linked hardware devices remain visible while Agent, SNMP or Prometheus telemetry
 is being set up, even before a collector record or first reading exists. Missing
 readings stay unknown; visibility does not imply the device is healthy.
@@ -40,6 +68,8 @@ at service level contains shared routing, alerts and maintenance only.
 Use Configure from Checks for individual protocol settings, duplication and
 deletion. Graphs appear only on Overview. **Add check** is available
 in the page actions on every tab for editable, host-linked services.
+Numeric REST histories remain graphs when some observations are missing; gaps
+stay gaps and zero stays a valid reading. Text and boolean histories remain lists.
 
 The former `/servers` interface no longer renders a separate fleet or settings
 workspace. Its index redirects to Hardware, add redirects to onboarding, and host

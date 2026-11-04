@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "profile_name": "ubiquiti-unifi",
-  "display_name": "Ubiquiti Unifi",
-  "description": "Ubiquiti UniFi Wireless and Network Infrastructure (UBNT-MIB)",
+  "display_name": "Ubiquiti UniFi",
+  "description": "UniFi network infrastructure and Cloud Key appliances; optional UCD-SNMP host metrics verified against a UCK G2 Plus walk, with UBNT-MIB wireless definitions",
   "vendor": "Ubiquiti",
   "device_classes": [
-    "wireless"
+    "wireless",
+    "appliance"
   ],
   "state": "experimental",
   "detection": {
@@ -35,6 +36,160 @@
     }
   },
   "scalars": {
+    "uptime": {
+      "oid": "1.3.6.1.2.1.1.3.0",
+      "type": "timeticks",
+      "unit": "seconds",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.uptime.seconds",
+      "required": false,
+      "priority": 100,
+      "timeout_ms": null
+    },
+    "cpu_idle": {
+      "oid": "1.3.6.1.4.1.2021.11.11.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "system.cpu.idle_percent",
+      "required": false,
+      "priority": 90,
+      "timeout_ms": null
+    },
+    "memory_total": {
+      "oid": "1.3.6.1.4.1.2021.4.5.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.total_bytes",
+      "required": false,
+      "priority": 85,
+      "timeout_ms": null
+    },
+    "memory_available": {
+      "oid": "1.3.6.1.4.1.2021.4.6.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.available_bytes",
+      "required": false,
+      "priority": 80,
+      "timeout_ms": null
+    },
+    "load_one": {
+      "oid": "1.3.6.1.4.1.2021.10.1.5.1",
+      "type": "integer",
+      "unit": "count",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.load.1m",
+      "required": false,
+      "priority": 75,
+      "timeout_ms": null
+    },
+    "load_five": {
+      "oid": "1.3.6.1.4.1.2021.10.1.5.2",
+      "type": "integer",
+      "unit": "count",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.load.5m",
+      "required": false,
+      "priority": 75,
+      "timeout_ms": null
+    },
+    "load_fifteen": {
+      "oid": "1.3.6.1.4.1.2021.10.1.5.3",
+      "type": "integer",
+      "unit": "count",
+      "scale": 0.01,
+      "transform": null,
+      "metric": "system.load.15m",
+      "required": false,
+      "priority": 75,
+      "timeout_ms": null
+    },
+    "interfaces_count": {
+      "oid": "1.3.6.1.2.1.2.1.0",
+      "type": "gauge",
+      "unit": "count",
+      "scale": 1,
+      "transform": null,
+      "metric": "network.interface.count",
+      "required": false,
+      "priority": 70,
+      "timeout_ms": null
+    },
+    "cpu_user": {
+      "oid": "1.3.6.1.4.1.2021.11.9.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "system.cpu.user_percent",
+      "required": false,
+      "priority": 60,
+      "timeout_ms": null
+    },
+    "cpu_system": {
+      "oid": "1.3.6.1.4.1.2021.11.10.0",
+      "type": "integer",
+      "unit": "percent",
+      "scale": 1,
+      "transform": null,
+      "metric": "system.cpu.system_percent",
+      "required": false,
+      "priority": 60,
+      "timeout_ms": null
+    },
+    "memory_buffered": {
+      "oid": "1.3.6.1.4.1.2021.4.14.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.buffered_bytes",
+      "required": false,
+      "priority": 50,
+      "timeout_ms": null
+    },
+    "memory_cached": {
+      "oid": "1.3.6.1.4.1.2021.4.15.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.cached_bytes",
+      "required": false,
+      "priority": 50,
+      "timeout_ms": null
+    },
+    "swap_total": {
+      "oid": "1.3.6.1.4.1.2021.4.3.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.swap.total_bytes",
+      "required": false,
+      "priority": 40,
+      "timeout_ms": null
+    },
+    "swap_available": {
+      "oid": "1.3.6.1.4.1.2021.4.4.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.swap.available_bytes",
+      "required": false,
+      "priority": 40,
+      "timeout_ms": null
+    },
     "system_version": {
       "oid": "1.3.6.1.4.1.41112.1.3.1.0",
       "type": "string",

@@ -124,7 +124,10 @@ reporting the new version confirms the result; no upgrade commands are executed
 by the web UI.
 
 An application version without a package revision cannot prove that the package
-is current. Missing metadata, unsupported version formats and differing Debian/
+is current. When the application matches but its package revision is unreported,
+the badge says **Application version matches**, with package-level verification
+still unknown. The collector reports its application version, so this is not a
+heartbeat or monitoring failure. Missing metadata, unsupported version formats and differing Debian/
 RPM references stay unknown rather than showing a green current badge. Versions
 newer than the selected reference are shown as ahead, not as needing a downgrade.
 Lookup failures expose a retry. Hardware shows equivalent agent/collector status;

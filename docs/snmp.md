@@ -26,6 +26,31 @@ With **Auto**, enabled profiles are matched against standard SNMP identity infor
 
 Profiles marked **Experimental** are available for explicit manual selection but excluded from automatic matching. This status means a profile has not been enabled for general automatic selection; its vendor OIDs or coverage may still need validation. Disabled profiles cannot be selected or matched. See [Local Network Collector](local-network-collector) for collector-specific polling limits.
 
+### UniFi Cloud Key G2 Plus
+
+The **Ubiquiti UniFi** (`ubiquiti-unifi`) profile includes optional host metrics
+verified against a UCK G2 Plus running UniFi OS 6.0.11: SNMP uptime, CPU idle/user/
+system percentages, RAM total/free/buffer/cache, swap total/free, 1/5/15-minute
+load averages, and interface count. Kilobyte memory readings are converted to
+bytes, integer load averages are divided by 100, and uptime ticks are converted
+to seconds. Existing CPU/memory projections use idle CPU and free RAM to derive
+utilization and used memory; used RAM includes buffers and cache.
+
+Select this experimental profile explicitly after the updated registry is
+deployed to the control plane and Monitoring Worker. Local collectors receive
+its numeric scalar poll plan from the control plane; no full-tree SNMP walk is
+added to each poll. Worker poll budgets prioritize uptime, CPU, and RAM before auxiliary metrics. Other UniFi models may
+omit these OIDs; missing optional readings do not fail a poll. Existing wireless
+definitions remain, but the Cloud Key walk did not expose UBNT wireless OIDs.
+Its generic Net-SNMP system object ID is not a UniFi-specific detection signature.
+
+The supplied walk also contains disk I/O counters and temperature sensor rows,
+but no HOST-RESOURCES storage capacity table. Disk I/O counters do not establish
+free disk space. Sensor readings have inconsistent apparent scaling across
+rows, so this profile does not guess Celsius conversions or pin sensor/interface
+indexes from one appliance. Additional scalar series do not imply dedicated
+charts for every metric.
+
 ## Troubleshoot
 
 - Confirm UDP/161 is reachable from the selected worker or LNC.
