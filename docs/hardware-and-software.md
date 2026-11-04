@@ -277,6 +277,14 @@ A Hardware host page is split into tabs. The selected tab and graph window are k
 
 - **Overview** shows current CPU, memory, and storage, key facts, the three newest open incidents, a host status card (Agent version and channel, collector health, package updates), and quick tiles for GPU, the hottest sensor, current network rate, and disk health. Tiles open the tab with the details.
 - **Performance** shows CPU, memory, storage, network, and GPU graphs for **1 h**, **24 h**, or **7 d**. Every graph uses the exact selected window, and GPU history opens expanded. The 7-day view refreshes on request rather than every 30 seconds. An empty window shows one message instead of empty charts.
+
+  Per-core CPU charts only plot actual reported core samples. **Up to date**
+  compares the agent with the published repository version; it does not certify
+  that every optional metric is reported. Missing per-core history is not filled
+  by dividing total CPU across cores. Total CPU remains available separately.
+  Interface rates use readable B/s, KiB/s and MiB/s labels. Multi-series legends
+  page horizontally instead of wrapping over the plot. CPU cores occupy a full
+  row, with received and sent interface charts paired below on desktop.
 - **Workloads** lists Docker containers and Proxmox guests for managed hosts.
 - **Health & logs** shows active incidents, security and package updates, agent delivery, processes, sensors, disks, and recent host events. A badge counts open incidents.
   - Incidents are open warnings, errors, and critical alerts. Recoveries and notices stay in **Settings → Notifications → History**. Editors can **Acknowledge** or **Resolve** an incident here; a flow recovery resolves the alert its output raised.
