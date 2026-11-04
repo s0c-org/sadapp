@@ -36,6 +36,15 @@ The inspector sits alongside the canvas on wide screens and above it on smaller 
 same collision-aware, undoable save pipeline as dragging. Standard or Tall leaves more
 space for chart previews; **Preview** shows the visitor layout without editor controls.
 
+Library cards wrap their full names and descriptions. Wide layouts reserve readable
+library and inspector widths; collapse the library when you need more canvas space.
+
+The platform's public `/status` page keeps component status, availability and sampled
+history visible. Incomplete or unknown availability coverage remains flagged beside the
+history. Expand **Observation details** for timestamps, verified network capabilities,
+unknown-observation counts and earlier single-observer history; excluded observations
+do not become confirmed uptime or downtime.
+
 History windows, graph style, gauge style and non-percentage gauge maxima are available
 without advanced mode. **Advanced controls** reveal precise canvas/threshold/appearance configuration without
 resetting hidden settings. Webhook and domain configuration lives in **Integrations**.

@@ -53,6 +53,15 @@ Required/Advisory roles. Use **Add check** to open
 `/onboarding?flow=check&host=[routeKey]`; service links also carry their context.
 Global Add check can create a new software-only service or select an existing host.
 See [Adding a check](software-add-check.md).
+Hardware, new software services and Local Network Collector onboarding offer an
+optional **Fleet Map location**, with a region or GeoNames city-center pin.
+Physical geography is independent of Monitoring Worker routing and collector
+site keys. Agent invitations retain the chosen geography until the first callback
+creates the host. A city pin is approximate, not a street address or proof of the
+device's position. No browser geolocation is requested. Edit locations later in
+host/collector settings, or assign host sites in **Settings → Sites**.
+Collector pins are saved at registration; the account Fleet Map includes the
+collector once it has a host or check in the selected workspace scope.
 Shared host settings link back to Software and to SNMP trap history.
 
 Local Network Collectors support SNMPv1, v2c and v3. Credential verification is

@@ -1,0 +1,60 @@
+{
+  "_comment": "Synthetic protocol fixture only; not a captured device or vendor validation fixture.",
+  "columns": {
+    "if.name": { "1": "STRING: \"eth0\"", "2": "STRING: \"eth1\"" },
+    "if.hc_in": { "1": "Counter64: 0" },
+    "if.in": { "1": "Counter32: 99", "2": "Counter32: 25" },
+    "if.out": { "1": "Counter32: 123" },
+    "if.status": { "1": "INTEGER: up(1)" },
+    "if.high_speed": { "1": "Gauge32: 1000" },
+    "if.in_errors": { "1": "Counter32: 0" },
+    "if.out_errors": { "1": "Counter32: 2" },
+    "if.in_discards": { "1": "Counter32: 0" },
+    "if.out_discards": { "1": "Counter32: 3" },
+    "if.hc_in_packets": { "1": "Counter64: 0" },
+    "if.in_packets": { "1": "Counter32: 99" },
+    "if.out_packets": { "1": "Counter32: 42" },
+    "if.last_change": { "1": "Timeticks: (12345) 0:02:03.45" },
+    "storage.type": { "3": "OID: .1.3.6.1.2.1.25.2.1.4" },
+    "storage.name": { "3": "STRING: \"/\"" },
+    "storage.allocation": { "3": "INTEGER: 1024" },
+    "storage.size": { "3": "INTEGER: 100" },
+    "storage.used": { "3": "INTEGER: 25" },
+    "sensor.type": { "7": "INTEGER: celsius(8)", "8": "INTEGER: rpm(10)" },
+    "sensor.scale": { "7": "INTEGER: milli(8)", "8": "INTEGER: units(9)" },
+    "sensor.precision": { "7": "INTEGER: 1", "8": "INTEGER: 0" },
+    "sensor.value": { "7": "INTEGER: 421000", "8": "INTEGER: 1200" },
+    "sensor.status": { "7": "INTEGER: ok(1)", "8": "INTEGER: ok(1)" },
+    "entity.name": { "7": "STRING: \"CPU temperature\"", "8": "STRING: \"Chassis fan\"" },
+    "entity.model": { "7": "STRING: \"Synthetic sensor model\"" }
+  },
+  "snapshot": {
+    "metrics": [
+      { "name": "interface.in_octets", "metricKey": "network.receive.bytes_total", "unit": "bytes", "valueType": "COUNTER", "value": 0.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.out_octets", "metricKey": "network.transmit.bytes_total", "unit": "bytes", "valueType": "COUNTER", "value": 123.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.oper_status", "metricKey": "network.interface.oper_status", "unit": "state", "valueType": "GAUGE", "value": 1.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.speed_bps", "metricKey": "network.interface.speed_bps", "unit": "bits_per_second", "valueType": "GAUGE", "value": 1000000000.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.in_errors", "metricKey": "network.interface.receive.errors_total", "unit": "count", "valueType": "COUNTER", "value": 0.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.out_errors", "metricKey": "network.interface.transmit.errors_total", "unit": "count", "valueType": "COUNTER", "value": 2.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.in_discards", "metricKey": "network.interface.receive.discards_total", "unit": "count", "valueType": "COUNTER", "value": 0.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.out_discards", "metricKey": "network.interface.transmit.discards_total", "unit": "count", "valueType": "COUNTER", "value": 3.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.in_packets", "metricKey": "network.interface.receive.unicast_packets_total", "unit": "count", "valueType": "COUNTER", "value": 0.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.out_packets", "metricKey": "network.interface.transmit.unicast_packets_total", "unit": "count", "valueType": "COUNTER", "value": 42.0, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.last_change_seconds", "metricKey": "network.interface.last_change_seconds", "unit": "seconds", "valueType": "GAUGE", "value": 123.45, "labels": { "interface_index": "1", "name": "eth0" } },
+      { "name": "interface.in_octets", "metricKey": "network.receive.bytes_total", "unit": "bytes", "valueType": "COUNTER", "value": 25.0, "labels": { "interface_index": "2", "name": "eth1" } },
+      { "name": "volume.total_bytes", "metricKey": "disk.volume.total_bytes", "unit": "bytes", "valueType": "GAUGE", "value": 102400.0, "labels": { "volume_index": "3", "name": "/" } },
+      { "name": "volume.used_bytes", "metricKey": "disk.volume.used_bytes", "unit": "bytes", "valueType": "GAUGE", "value": 25600.0, "labels": { "volume_index": "3", "name": "/" } },
+      { "name": "volume.free_bytes", "metricKey": "disk.volume.free_bytes", "unit": "bytes", "valueType": "GAUGE", "value": 76800.0, "labels": { "volume_index": "3", "name": "/" } },
+      { "name": "volume.used_percent", "metricKey": "disk.volume.used_percent", "unit": "percent", "valueType": "GAUGE", "value": 25.0, "labels": { "volume_index": "3", "name": "/" } },
+      { "name": "sensor.temperature_celsius", "metricKey": "hardware.temperature.celsius", "unit": "celsius", "valueType": "GAUGE", "value": 42.1, "labels": { "sensor_index": "7", "name": "CPU temperature" } },
+      { "name": "sensor.fan_rpm", "metricKey": "hardware.fan.speed_rpm", "unit": "rpm", "valueType": "GAUGE", "value": 1200.0, "labels": { "sensor_index": "8", "name": "Chassis fan" } }
+    ],
+    "inventory": [
+      { "kind": "interface", "index": 1, "name": "eth0", "attributes": {} },
+      { "kind": "interface", "index": 2, "name": "eth1", "attributes": {} },
+      { "kind": "volume", "index": 3, "name": "/", "attributes": {} },
+      { "kind": "entity", "index": 7, "name": "CPU temperature", "attributes": { "model": "Synthetic sensor model" } },
+      { "kind": "entity", "index": 8, "name": "Chassis fan", "attributes": {} }
+    ]
+  }
+}

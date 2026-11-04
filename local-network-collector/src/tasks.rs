@@ -6,7 +6,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -19,9 +19,25 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE},
     Method,
 };
+use sadapp_snmp_profile_engine::capability_discovery::{
+    profile_column_group, scalar_group, standard_column_group, CapabilityRecorder, ColumnResult,
+};
+use sadapp_snmp_profile_engine::discovery_cache::{DiscoveryCache, DiscoveryKey};
+use sadapp_snmp_profile_engine::profile_tables::{
+    normalize_profile_tables, parse_profile_column, validate_plans, ProfileColumns,
+    ProfileSnapshot, TablePlan,
+};
+use sadapp_snmp_profile_engine::standard_tables::{
+    aggregate_storage_kind, normalize_standard_tables_with_issues, StandardColumns,
+    StandardSnapshot, STANDARD_GROUP_TIMEOUT, STANDARD_MAX_PARALLEL, STANDARD_TABLES,
+};
+use sadapp_snmp_profile_engine::table_transport::{
+    classify_table_failure, execute_table_command_partial, TableCommandOutput, TableOutputBudget,
+    TableWalkFailure, TableWalkPolicy, DEFAULT_TABLE_MAX_ROWS,
+};
 use sadapp_snmp_profile_engine::{
-    detect as detect_snmp_profiles, detection_bundle_checksum, metric_capability_group,
-    DetectionProfile, IdentityProbe,
+    apply_numeric_transform, detect as detect_snmp_profiles, detection_bundle_checksum,
+    metric_capability_group, DetectionProfile, IdentityProbe, Transform,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -52,8 +68,7 @@ const REVERSE_DNS_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_SNMP_OIDS: usize = 128;
 const MAX_SNMP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
-const MAX_SNMP_STORAGE_ROWS: usize = 256;
-const MAX_SNMP_WALK_BYTES: usize = 128 * 1024;
+const MAX_SNMP_STORAGE_ROWS: usize = DEFAULT_TABLE_MAX_ROWS;
 const OID_HR_STORAGE_TYPE: &str = "1.3.6.1.2.1.25.2.3.1.2";
 const OID_HR_STORAGE_ALLOC_UNITS: &str = "1.3.6.1.2.1.25.2.3.1.4";
 const OID_HR_STORAGE_SIZE: &str = "1.3.6.1.2.1.25.2.3.1.5";
@@ -86,12 +101,83 @@ pub trait CommandExecutor: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
         self.run(program, args)
     }
+
+    fn run_table<'a>(
+        &'a self,
+        program: &'a str,
+        args: &'a [String],
+        policy: TableWalkPolicy,
+        deadline: tokio::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<CommandOutput, TableWalkFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            let output = self
+                .run_table_partial(program, args, policy, deadline)
+                .await?;
+            if let Some(limit) = output.limit {
+                return Err(limit);
+            }
+            Ok(CommandOutput {
+                success: output.success,
+                stdout: output.stdout,
+                stderr: output.stderr,
+            })
+        })
+    }
+
+    fn run_table_partial<'a>(
+        &'a self,
+        program: &'a str,
+        args: &'a [String],
+        policy: TableWalkPolicy,
+        deadline: tokio::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<TableCommandOutput, TableWalkFailure>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let output = tokio::time::timeout_at(deadline, self.run_with_stderr(program, args))
+                .await
+                .map_err(|_| TableWalkFailure::Timeout)?
+                .map_err(|_| TableWalkFailure::Io)?;
+            let mut budget = TableOutputBudget::new(policy);
+            let mut stdout = Vec::new();
+            let mut limit = None;
+            for line in output.stdout.split_inclusive(|byte| *byte == b'\n') {
+                if let Err(error) = budget.push(line, true) {
+                    limit = Some(error);
+                    break;
+                }
+                stdout.extend_from_slice(line);
+            }
+            if limit.is_none() {
+                limit = budget.push(&output.stderr, false).err();
+            }
+            Ok(TableCommandOutput {
+                success: output.success,
+                stdout,
+                stderr: output.stderr,
+                limit,
+            })
+        })
+    }
 }
 
 #[derive(Debug)]
 pub struct TokioCommandExecutor;
 
 impl CommandExecutor for TokioCommandExecutor {
+    fn run_table_partial<'a>(
+        &'a self,
+        program: &'a str,
+        args: &'a [String],
+        policy: TableWalkPolicy,
+        deadline: tokio::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<TableCommandOutput, TableWalkFailure>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let mut command = Command::new(program);
+            command.args(args);
+            execute_table_command_partial(command, policy, deadline).await
+        })
+    }
     fn run<'a>(
         &'a self,
         program: &'a str,
@@ -949,6 +1035,24 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
     let timeout_ms = bounded_u64(payload.get("timeoutMs"), 100, 10_000, "timeoutMs")?;
     let retries = bounded_u64(payload.get("retries"), 0, 3, "retries")?;
     let verify_only = payload.get("verifyOnly").and_then(Value::as_bool) == Some(true);
+    let discovery_only = payload.get("discoveryOnly").and_then(Value::as_bool) == Some(true);
+    if discovery_only && (verify_only || text(payload, "discoveryToken")?.len() > 128) {
+        return Err(TaskError::invalid(
+            "discoveryOnly requires a separate bounded discovery token",
+        ));
+    }
+    let table_plans: Vec<TablePlan> = if verify_only {
+        Vec::new()
+    } else {
+        payload
+            .get("tablePlans")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| TaskError::invalid("tablePlans are invalid"))?
+            .unwrap_or_default()
+    };
+    validate_plans(&table_plans)
+        .map_err(|_| TaskError::invalid("tablePlans exceed supported collection bounds"))?;
     let poll_plan = if verify_only {
         text(payload, "verificationServerId")?;
         text(payload, "verificationToken")?;
@@ -960,6 +1064,7 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
             value_type: "GAUGE".into(),
             required: false,
             labels: None,
+            transform: None,
         }]
     } else {
         snmp_poll_plan(payload.get("pollPlan"))?
@@ -1007,6 +1112,7 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
                     value_type: "GAUGE".into(),
                     required: false,
                     labels: None,
+                    transform: None,
                 },
                 SnmpPollEntry {
                     oid: OID_SNMP_SYS_DESCR.into(),
@@ -1016,6 +1122,7 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
                     value_type: "GAUGE".into(),
                     required: false,
                     labels: None,
+                    transform: None,
                 },
             ];
             let identity_args = snmp_arguments(
@@ -1084,21 +1191,29 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
             "latencyMs": started.elapsed().as_secs_f64() * 1000.0,
         })));
     }
-    let values = parse_snmp_output(&output.stdout, &poll_plan)?;
+    let raw_values = parse_snmp_output(&output.stdout, &poll_plan)?;
+    let values = transform_snmp_values(&poll_plan, &raw_values);
+    let uptime_seconds = poll_plan
+        .iter()
+        .zip(&raw_values)
+        .find_map(|(entry, value)| {
+            (entry.oid.trim_start_matches('.') == "1.3.6.1.2.1.1.3.0")
+                .then_some(*value)
+                .flatten()
+                .map(|value| value / 100.0)
+        });
     let mut group_counts =
         std::collections::BTreeMap::<&'static str, (usize, usize, Vec<Value>)>::new();
     let mut missing_metrics = Vec::new();
     for (entry, value) in poll_plan.iter().zip(&values) {
-        let available = value
-            .and_then(|value| scale_snmp_value(value, entry.scale))
-            .is_some();
+        let available = value.is_some();
         let group = metric_capability_group(&entry.metric_key);
         let counts = group_counts.entry(group).or_default();
         counts.0 += 1;
         if available {
             counts.1 += 1;
         } else {
-            let missing = json!({ "metricKey": entry.metric_key, "oid": entry.oid });
+            let missing = json!({ "metricKey": entry.metric_key, "oid": entry.oid, "required": entry.required });
             counts.2.push(missing.clone());
             missing_metrics.push(missing);
         }
@@ -1131,7 +1246,7 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         .iter()
         .zip(values)
         .filter_map(|(entry, value)| {
-            let value = scale_snmp_value(value?, entry.scale)?;
+            let value = value?;
             let mut sample = json!({
                 "resource": resource,
                 "collector": collector,
@@ -1150,8 +1265,145 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         })
         .collect::<Vec<_>>();
     let mut samples = samples;
-    let host_resources =
-        poll_snmp_host_resources(context, task, target, port, timeout_ms, retries).await;
+    let mut capability_recorder = CapabilityRecorder::new();
+    let raw_lines = std::str::from_utf8(&output.stdout)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    for ((entry, value), raw) in poll_plan.iter().zip(&raw_values).zip(raw_lines) {
+        capability_recorder.record_column(
+            scalar_group(&entry.metric_key),
+            &entry.oid,
+            if value.is_some() {
+                vec!["0"]
+            } else {
+                Vec::new()
+            },
+            if value.is_some() {
+                ColumnResult::Rows { code: None }
+            } else if parse_snmp_number(raw).is_err_and(|error| error.code == "SNMP_NO_SUCH_OID") {
+                ColumnResult::Empty
+            } else {
+                ColumnResult::Failed("SNMP_INVALID_VALUE".into())
+            },
+        );
+    }
+    let host_resources = poll_snmp_host_resources(
+        context,
+        task,
+        target,
+        port,
+        timeout_ms,
+        retries,
+        uptime_seconds,
+    )
+    .await;
+    let (standard, standard_issues) = poll_snmp_standard_tables(
+        context,
+        task,
+        target,
+        port,
+        (timeout_ms, retries),
+        uptime_seconds,
+        &host_resources.columns,
+        &mut capability_recorder,
+    )
+    .await;
+    let mut collection_issues = host_resources.collection_issues;
+    collection_issues.extend(standard_issues);
+    let (profile_tables, profile_issues) = poll_snmp_profile_tables(
+        context,
+        task,
+        target,
+        port,
+        (timeout_ms, retries),
+        uptime_seconds,
+        &table_plans,
+        &mut capability_recorder,
+    )
+    .await;
+    collection_issues.extend(profile_issues);
+    let mut supplemental_samples = Vec::new();
+    for metric in &standard.metrics {
+        let sample = json!({
+            "resource": resource, "collector": collector, "metricKey": metric.metric_key,
+            "unit": metric.unit, "valueType": metric.value_type, "observedAt": observed_at,
+            "value": metric.value, "labels": metric.labels, "quality": "GOOD",
+            "metadata": { "source": "SNMP-standard-tables", "legacyProjection": metric.name.starts_with("sensor.") },
+        });
+        if !metric.name.starts_with("sensor.") {
+            supplemental_samples.push(sample);
+        } else {
+            samples.push(sample);
+        }
+    }
+    for metric in &profile_tables.metrics {
+        supplemental_samples.push(json!({
+            "resource": resource, "collector": collector, "metricKey": metric.metric_key,
+            "unit": metric.unit, "valueType": metric.value_type, "observedAt": observed_at,
+            "value": metric.value, "labels": metric.labels, "quality": "GOOD",
+            "metadata": { "source": "SNMP-profile-tables", "legacyProjection": false },
+        }));
+    }
+    let aggregate_keys = [
+        (
+            "interface.in_octets",
+            "network.receive.bytes_total",
+            "bytes",
+            "COUNTER",
+        ),
+        (
+            "interface.out_octets",
+            "network.transmit.bytes_total",
+            "bytes",
+            "COUNTER",
+        ),
+        (
+            "interface.in_errors",
+            "network.interface.receive.errors_total",
+            "count",
+            "COUNTER",
+        ),
+        (
+            "interface.out_errors",
+            "network.interface.transmit.errors_total",
+            "count",
+            "COUNTER",
+        ),
+    ];
+    for (name, key, unit, value_type) in aggregate_keys {
+        let metrics = standard
+            .metrics
+            .iter()
+            .filter(|metric| metric.name == name)
+            .collect::<Vec<_>>();
+        if !metrics.is_empty() {
+            let value: f64 = metrics.iter().map(|metric| metric.value).sum();
+            if value.is_finite() {
+                samples.push(json!({ "resource": resource, "collector": collector, "metricKey": key, "unit": unit, "valueType": value_type, "observedAt": observed_at, "value": value, "metadata": { "source": "SNMP-standard-tables" } }));
+            }
+        }
+    }
+    let statuses = standard
+        .metrics
+        .iter()
+        .filter(|metric| metric.name == "interface.oper_status")
+        .collect::<Vec<_>>();
+    if !statuses.is_empty() {
+        for (key, value) in [
+            (
+                "network.interface.up_count",
+                statuses.iter().filter(|metric| metric.value == 1.0).count(),
+            ),
+            (
+                "network.interface.down_count",
+                statuses.iter().filter(|metric| metric.value != 1.0).count(),
+            ),
+        ] {
+            samples.push(json!({ "resource": resource, "collector": collector, "metricKey": key, "unit": "count", "valueType": "GAUGE", "observedAt": observed_at, "value": value, "metadata": { "source": "SNMP-standard-tables" } }));
+        }
+    }
     let has_metric = |samples: &[Value], keys: &[&str]| {
         samples.iter().any(|sample| {
             sample
@@ -1210,23 +1462,75 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         }
         samples.push(sample);
     }
-    if samples.is_empty() {
+    let capability_report = capability_recorder.finish(&profile_checksum, &observed_at);
+    if discovery_only {
+        return Ok(json_object(json!({
+            "success": true, "discoveryOnly": true, "capabilityReport": capability_report,
+            "latencyMs": started.elapsed().as_secs_f64() * 1000.0,
+            "profile": { "name": profile_name, "version": profile_version, "checksum": profile_checksum },
+            "detectionStatus": if payload.get("detectionBundle").is_some() {
+                if detection_outcome.is_some() { "completed" } else { "unavailable" }
+            } else { "not_due" },
+            "detection": detection_outcome,
+        })));
+    }
+    if samples.is_empty() && supplemental_samples.is_empty() {
         return Err(TaskError::failed(
             "SNMP_NO_METRICS",
             "SNMP returned no usable profile metrics",
         ));
     }
-    context
-        .telemetry_spool
-        .push(&json!({ "idempotencyKey": format!("task:{}", task.id), "samples": samples, "inventory": [] }))
-        .map_err(TaskError::internal)?;
+    samples.extend(supplemental_samples);
+    let mut inventory = Vec::new();
+    for (category, entries) in [
+        (
+            "snmp.standard",
+            serde_json::to_value(&standard.inventory).map_err(TaskError::internal)?,
+        ),
+        (
+            "snmp.profile",
+            serde_json::to_value(&profile_tables.inventory).map_err(TaskError::internal)?,
+        ),
+    ] {
+        if entries.as_array().is_none_or(Vec::is_empty) {
+            continue;
+        }
+        use sha2::{Digest, Sha256};
+        let payload = json!({ "entries": entries });
+        let checksum = Sha256::digest(serde_json::to_vec(&payload).map_err(TaskError::internal)?)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        inventory.push(json!({
+            "resource": resource, "collector": collector, "category": category,
+            "schemaVersion": 1, "checksum": checksum, "payload": payload, "observedAt": observed_at,
+        }));
+    }
+    for (index, chunk) in samples.chunks(500 - inventory.len()).enumerate() {
+        context.telemetry_spool.push(&json!({
+            "idempotencyKey": if index == 0 { format!("task:{}", task.id) } else { format!("task:{}:{index}", task.id) },
+            "samples": chunk, "inventory": if index == 0 { inventory.clone() } else { Vec::new() },
+        })).map_err(TaskError::internal)?;
+    }
+    collection_issues.sort_by_key(|issue| {
+        (
+            issue["code"] == "SNMP_UNSUPPORTED",
+            issue["group"].as_str().unwrap_or("").to_owned(),
+            issue["oid"].as_str().unwrap_or("").to_owned(),
+            issue["code"].as_str().unwrap_or("").to_owned(),
+        )
+    });
+    collection_issues.dedup();
+    collection_issues.truncate(256);
     Ok(json_object(json!({
         "success": true,
         "latencyMs": started.elapsed().as_secs_f64() * 1000.0,
         "sampleCount": samples.len(),
-        "partial": !missing_metrics.is_empty(),
+        "partial": !missing_metrics.is_empty() || collection_issues.iter().any(|issue| issue["code"] != "SNMP_UNSUPPORTED"),
         "missingMetrics": missing_metrics,
         "capabilityGroups": capability_groups,
+        "capabilityReport": capability_report,
+        "collectionIssues": collection_issues,
         "detectionStatus": if payload.get("detectionBundle").is_some() {
             if detection_outcome.is_some() { "completed" } else { "unavailable" }
         } else {
@@ -1355,6 +1659,409 @@ struct HostResourceUsage {
     disk: Option<(f64, f64)>,
     memory: Option<(f64, f64)>,
     cpu_utilization: Option<f64>,
+    collection_issues: Vec<Value>,
+    columns: StandardColumns,
+}
+
+type StorageMetadata = (
+    std::collections::HashMap<u32, String>,
+    std::collections::HashMap<u32, String>,
+);
+static STORAGE_DISCOVERY: OnceLock<Mutex<DiscoveryCache<StorageMetadata>>> = OnceLock::new();
+type StandardMetadata = (StandardColumns, Vec<Value>);
+static STANDARD_DISCOVERY: OnceLock<Mutex<DiscoveryCache<StandardMetadata>>> = OnceLock::new();
+type ProfileTableCache = DiscoveryCache<ProfileColumns, (String, String, String)>;
+static PROFILE_TABLE_DISCOVERY: OnceLock<Mutex<ProfileTableCache>> = OnceLock::new();
+
+#[allow(clippy::too_many_arguments)]
+async fn poll_snmp_profile_tables(
+    context: &TaskContext,
+    task: &TaskLease,
+    target: IpAddr,
+    port: u16,
+    request: (u64, u64),
+    uptime_seconds: Option<f64>,
+    plans: &[TablePlan],
+    capability_recorder: &mut CapabilityRecorder,
+) -> (ProfileSnapshot, Vec<Value>) {
+    let deadline = tokio::time::Instant::now() + STANDARD_GROUP_TIMEOUT;
+    let collect = |metadata| {
+        let mut requested = Vec::new();
+        for plan in plans {
+            for column in &plan.columns {
+                if (column.value_type == "STRING") == metadata {
+                    requested.push((plan.clone(), column.clone()));
+                }
+            }
+        }
+        let mut pending = Vec::new();
+        for (plan, column) in requested {
+            pending.push(async move {
+                let oid = format!("{}.{}", plan.base_oid, column.oid_suffix);
+                let result = snmp_walk_partial_until(
+                    context,
+                    task,
+                    target,
+                    port,
+                    request,
+                    &oid,
+                    Some(deadline),
+                    plan.max_rows as usize,
+                )
+                .await;
+                (plan, column, oid, result)
+            });
+        }
+        stream::iter(pending).buffer_unordered(STANDARD_MAX_PARALLEL)
+    };
+    let mut columns = ProfileColumns::new();
+    let mut issues = Vec::new();
+    let mut retained_bytes = 0usize;
+    for metadata in [false, true] {
+        let indices = columns
+            .iter()
+            .flat_map(|(table, values)| {
+                values.iter().flat_map(move |(column, rows)| {
+                    rows.keys()
+                        .map(move |index| (table.clone(), column.clone(), index.clone()))
+                })
+            })
+            .collect();
+        let mut auth_identity = task
+            .secrets
+            .iter()
+            .map(|(key, value)| format!("{key}:{value}"))
+            .collect::<Vec<_>>();
+        auth_identity.sort();
+        auth_identity.push(
+            task.payload
+                .get("auth")
+                .map(Value::to_string)
+                .unwrap_or_default(),
+        );
+        let identity = plans
+            .iter()
+            .map(|plan| format!("{plan:?}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        let key = DiscoveryKey::new(
+            task.payload
+                .get("serverId")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            &snmp_transport_address(target, port),
+            &identity,
+            task.payload
+                .get("version")
+                .and_then(Value::as_str)
+                .unwrap_or("2c"),
+            &auth_identity,
+        );
+        let cache =
+            PROFILE_TABLE_DISCOVERY.get_or_init(|| Mutex::new(DiscoveryCache::with_capacity(128)));
+        if metadata && task.payload.get("discoveryOnly").and_then(Value::as_bool) != Some(true) {
+            let cached = cache
+                .lock()
+                .expect("SNMP profile discovery cache lock")
+                .get(&key, uptime_seconds, &indices, Instant::now());
+            if let Some(cached) = cached {
+                for plan in plans {
+                    for column in &plan.columns {
+                        if let Some(rows) = cached
+                            .get(&plan.name)
+                            .and_then(|values| values.get(&column.name))
+                        {
+                            capability_recorder.record_column(
+                                profile_column_group(plan, column),
+                                &format!("{}.{}", plan.base_oid, column.oid_suffix),
+                                rows.keys(),
+                                ColumnResult::Rows { code: None },
+                            );
+                        }
+                    }
+                }
+                for (table, metadata_columns) in cached {
+                    columns.entry(table).or_default().extend(metadata_columns);
+                }
+                break;
+            }
+        }
+        let mut discovered = ProfileColumns::new();
+        let mut pending = collect(metadata);
+        while let Some((plan, column, oid, result)) = pending.next().await {
+            let (output, limit) = match result {
+                Ok(output) => output,
+                Err(error) => {
+                    capability_recorder.record_column(
+                        profile_column_group(&plan, &column),
+                        &oid,
+                        Vec::<String>::new(),
+                        if error.code == "SNMP_UNSUPPORTED" {
+                            ColumnResult::Empty
+                        } else {
+                            ColumnResult::Failed(error.code.to_string())
+                        },
+                    );
+                    issues.push(json!({ "group": "vendor", "oid": oid, "code": error.code }));
+                    continue;
+                }
+            };
+            if let Some(limit) = limit {
+                issues.push(
+                    json!({ "group": "vendor", "oid": oid, "code": limit.diagnostic_code() }),
+                );
+            }
+            let remaining = 1_048_576usize.saturating_sub(retained_bytes);
+            let clipped = output.len() > remaining;
+            let output = if output.len() > remaining {
+                issues
+                    .push(json!({ "group": "vendor", "oid": oid, "code": "SNMP_RESPONSE_LIMIT" }));
+                let end = output
+                    .as_bytes()
+                    .iter()
+                    .take(remaining)
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |index| index + 1);
+                &output[..end]
+            } else {
+                &output
+            };
+            retained_bytes = retained_bytes.saturating_add(output.len());
+            let parsed = parse_profile_column(&plan, &column, output.as_bytes());
+            capability_recorder.record_column(
+                profile_column_group(&plan, &column),
+                &oid,
+                parsed.rows.keys(),
+                if output.to_ascii_lowercase().contains("no such")
+                    || output.to_ascii_lowercase().contains("no more variables")
+                {
+                    ColumnResult::Empty
+                } else {
+                    ColumnResult::Rows {
+                        code: limit
+                            .map(|value| value.diagnostic_code().to_owned())
+                            .or_else(|| clipped.then(|| "SNMP_RESPONSE_LIMIT".to_owned()))
+                            .or_else(|| parsed.issues.first().map(|issue| issue.code.clone())),
+                    }
+                },
+            );
+            for issue in parsed.issues {
+                issues.push(json!({ "group": "vendor", "oid": oid, "code": issue.code }));
+            }
+            if metadata {
+                discovered
+                    .entry(plan.name.clone())
+                    .or_default()
+                    .insert(column.name.clone(), parsed.rows.clone());
+            }
+            columns
+                .entry(plan.name.clone())
+                .or_default()
+                .insert(column.name.clone(), parsed.rows);
+        }
+        if metadata && issues.is_empty() {
+            cache
+                .lock()
+                .expect("SNMP profile discovery cache lock")
+                .insert(key, discovered, uptime_seconds, indices, Instant::now());
+        }
+    }
+    let (snapshot, normalization_issues) = normalize_profile_tables(plans, &columns);
+    for issue in normalization_issues {
+        if let Some(plan) = plans.iter().find(|plan| plan.name == issue.table) {
+            let oid = issue
+                .column
+                .as_ref()
+                .and_then(|name| plan.columns.iter().find(|column| &column.name == name))
+                .map(|column| format!("{}.{}", plan.base_oid, column.oid_suffix))
+                .unwrap_or_else(|| plan.base_oid.clone());
+            issues.push(json!({ "group": "vendor", "oid": oid, "code": issue.code }));
+        }
+    }
+    (snapshot, issues)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn poll_snmp_standard_tables(
+    context: &TaskContext,
+    task: &TaskLease,
+    target: IpAddr,
+    port: u16,
+    request: (u64, u64),
+    uptime_seconds: Option<f64>,
+    seeded_columns: &StandardColumns,
+    capability_recorder: &mut CapabilityRecorder,
+) -> (StandardSnapshot, Vec<Value>) {
+    let deadline = tokio::time::Instant::now() + STANDARD_GROUP_TIMEOUT;
+    let collect = |metadata| async move {
+        let mut pending = Vec::new();
+        for spec in STANDARD_TABLES {
+            if spec.metadata != metadata || seeded_columns.contains_key(spec.key) {
+                continue;
+            }
+            pending.push(async move {
+                let result = snmp_walk_values_partial_until(
+                    context,
+                    task,
+                    target,
+                    port,
+                    request,
+                    spec.oid,
+                    Some(deadline),
+                )
+                .await;
+                (spec, result)
+            });
+        }
+        stream::iter(pending)
+            .buffer_unordered(STANDARD_MAX_PARALLEL)
+            .collect::<Vec<_>>()
+            .await
+    };
+    let mut columns = seeded_columns.clone();
+    let mut issues = Vec::new();
+    for (spec, result) in collect(false).await {
+        match result {
+            Ok((values, limit)) => {
+                columns.insert(spec.key.to_owned(), values.into_iter().collect());
+                if let Some(limit) = limit {
+                    issues.push(json!({ "group": "inventory", "oid": spec.oid, "code": limit.diagnostic_code() }));
+                }
+            }
+            Err(error) => issues.push(json!({
+                "group": if spec.key.starts_with("if.") { "interfaces" } else if spec.oid.starts_with("1.3.6.1.2.1.25.2.3.") { "storage" } else { "sensors" },
+                "oid": spec.oid, "code": error.code,
+            })),
+        }
+    }
+    let indices = columns
+        .values()
+        .flat_map(|values| values.keys().copied())
+        .collect();
+    let index_identity = columns
+        .iter()
+        .map(|(key, values)| format!("{key}:{:?}", values.keys().collect::<Vec<_>>()))
+        .collect::<Vec<_>>()
+        .join(";");
+    let mut auth_identity = task
+        .secrets
+        .iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>();
+    auth_identity.sort();
+    auth_identity.push(
+        task.payload
+            .get("auth")
+            .map(Value::to_string)
+            .unwrap_or_default(),
+    );
+    let key = DiscoveryKey::new(
+        task.payload
+            .get("serverId")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                task.payload
+                    .get("resource")
+                    .and_then(|resource| resource.get("externalKey"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or(""),
+        &snmp_transport_address(target, port),
+        &format!(
+            "{}:{index_identity}",
+            task.payload
+                .get("profile")
+                .map(Value::to_string)
+                .unwrap_or_default()
+        ),
+        task.payload
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("2c"),
+        &auth_identity,
+    );
+    let cache = STANDARD_DISCOVERY.get_or_init(|| Mutex::new(DiscoveryCache::with_capacity(128)));
+    let cached = cache
+        .lock()
+        .expect("SNMP standard discovery cache lock")
+        .get(&key, uptime_seconds, &indices, Instant::now())
+        .filter(|_| task.payload.get("discoveryOnly").and_then(Value::as_bool) != Some(true));
+    let (metadata, metadata_issues) = if let Some(value) = cached {
+        value
+    } else {
+        let mut metadata = StandardColumns::new();
+        let mut metadata_issues = Vec::new();
+        for (spec, result) in collect(true).await {
+            match result {
+                Ok((values, limit)) => {
+                    metadata.insert(spec.key.to_owned(), values.into_iter().collect());
+                    if let Some(limit) = limit {
+                        metadata_issues.push(json!({ "group": "inventory", "oid": spec.oid, "code": limit.diagnostic_code() }));
+                    }
+                }
+                Err(error) => metadata_issues.push(json!({
+                    "group": if spec.key.starts_with("if.") { "interfaces" } else if spec.key.starts_with("sensor.") { "sensors" } else if spec.oid.starts_with("1.3.6.1.2.1.25.2.3.") { "storage" } else { "inventory" },
+                    "oid": spec.oid, "code": error.code,
+                })),
+            }
+        }
+        if metadata_issues
+            .iter()
+            .all(|issue| issue["code"] == "SNMP_UNSUPPORTED")
+            && issues.is_empty()
+        {
+            cache
+                .lock()
+                .expect("SNMP standard discovery cache lock")
+                .insert(
+                    key,
+                    (metadata.clone(), metadata_issues.clone()),
+                    uptime_seconds,
+                    indices,
+                    Instant::now(),
+                );
+        }
+        (metadata, metadata_issues)
+    };
+    for (key, values) in metadata {
+        columns.entry(key).or_insert(values);
+    }
+    issues.extend(metadata_issues);
+    for spec in STANDARD_TABLES {
+        let code = issues
+            .iter()
+            .find(|issue| issue["oid"] == spec.oid)
+            .and_then(|issue| issue["code"].as_str());
+        match columns.get(spec.key) {
+            Some(rows) => capability_recorder.record_column(
+                standard_column_group(spec.key),
+                spec.oid,
+                rows.keys().map(u32::to_string),
+                ColumnResult::Rows {
+                    code: code.map(str::to_owned),
+                },
+            ),
+            None => capability_recorder.record_column(
+                standard_column_group(spec.key),
+                spec.oid,
+                Vec::<String>::new(),
+                if code == Some("SNMP_UNSUPPORTED") {
+                    ColumnResult::Empty
+                } else {
+                    ColumnResult::Failed(code.unwrap_or("SNMP_NOT_ATTEMPTED").to_owned())
+                },
+            ),
+        }
+    }
+    let (snapshot, normalization_issues) = normalize_standard_tables_with_issues(&columns);
+    for issue in normalization_issues {
+        issues.push(json!({
+            "group": if ["interfaces", "sensors", "inventory", "storage"].contains(&issue.table.as_str()) { issue.table.as_str() } else { "inventory" },
+            "oid": issue.column.as_ref().and_then(|column| STANDARD_TABLES.iter().find(|spec| spec.key == column)).map_or("1.3.6.1.2.1", |spec| spec.oid),
+            "code": issue.code,
+        }));
+    }
+    (snapshot, issues)
 }
 
 async fn poll_snmp_host_resources(
@@ -1364,37 +2071,140 @@ async fn poll_snmp_host_resources(
     port: u16,
     timeout_ms: u64,
     retries: u64,
+    uptime_seconds: Option<f64>,
 ) -> HostResourceUsage {
     let walk =
         |oid: &'static str| snmp_walk_values(context, task, target, port, timeout_ms, retries, oid);
-    let (storage_types, allocation_units, sizes, used, processor_load) = tokio::join!(
-        walk(OID_HR_STORAGE_TYPE),
-        walk(OID_HR_STORAGE_ALLOC_UNITS),
+    let (sizes, used, processor_load) = tokio::join!(
         walk(OID_HR_STORAGE_SIZE),
         walk(OID_HR_STORAGE_USED),
         walk(OID_HR_PROCESSOR_LOAD),
     );
+    let indices = sizes
+        .iter()
+        .chain(used.iter())
+        .flat_map(|values| values.keys().copied())
+        .collect();
+    let mut auth_identity = task
+        .secrets
+        .iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>();
+    auth_identity.sort();
+    auth_identity.push(
+        task.payload
+            .get("auth")
+            .map(Value::to_string)
+            .unwrap_or_default(),
+    );
+    let key = DiscoveryKey::new(
+        task.payload
+            .get("serverId")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                task.payload
+                    .get("resource")
+                    .and_then(|resource| resource.get("externalKey"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or(""),
+        &snmp_transport_address(target, port),
+        &task
+            .payload
+            .get("profile")
+            .map(Value::to_string)
+            .unwrap_or_default(),
+        task.payload
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("2c"),
+        &auth_identity,
+    );
+    let cache = STORAGE_DISCOVERY.get_or_init(|| Mutex::new(DiscoveryCache::default()));
+    let cached = cache.lock().expect("SNMP discovery cache lock").get(
+        &key,
+        uptime_seconds,
+        &indices,
+        Instant::now(),
+    );
+    let (storage_types, allocation_units) = if let Some((types, units)) = cached {
+        (Ok(types), Ok(units))
+    } else {
+        let (types, units) =
+            tokio::join!(walk(OID_HR_STORAGE_TYPE), walk(OID_HR_STORAGE_ALLOC_UNITS));
+        if let (Ok(types), Ok(units)) = (&types, &units) {
+            if sizes.is_ok() && used.is_ok() {
+                cache.lock().expect("SNMP discovery cache lock").insert(
+                    key,
+                    (types.clone(), units.clone()),
+                    uptime_seconds,
+                    indices,
+                    Instant::now(),
+                );
+            }
+        }
+        (types, units)
+    };
     let mut usage = HostResourceUsage {
-        cpu_utilization: processor_load.as_ref().and_then(average_processor_load),
+        cpu_utilization: processor_load
+            .as_ref()
+            .ok()
+            .and_then(average_processor_load),
         ..HostResourceUsage::default()
     };
-    if let (Some(storage_types), Some(allocation_units), Some(sizes), Some(used)) =
-        (storage_types, allocation_units, sizes, used)
+    for (oid, result) in [
+        (OID_HR_STORAGE_TYPE, &storage_types),
+        (OID_HR_STORAGE_ALLOC_UNITS, &allocation_units),
+        (OID_HR_STORAGE_SIZE, &sizes),
+        (OID_HR_STORAGE_USED, &used),
+        (OID_HR_PROCESSOR_LOAD, &processor_load),
+    ] {
+        if let (Ok(values), Some(spec)) =
+            (result, STANDARD_TABLES.iter().find(|spec| spec.oid == oid))
+        {
+            usage.columns.insert(
+                spec.key.to_owned(),
+                values
+                    .iter()
+                    .map(|(index, value)| (*index, value.clone()))
+                    .collect(),
+            );
+        }
+        if let Err(error) = result {
+            usage.collection_issues.push(json!({
+                "group": if oid == OID_HR_PROCESSOR_LOAD { "cpu" } else { "storage" },
+                "oid": oid,
+                "code": error.code,
+            }));
+        }
+    }
+    if let (Ok(storage_types), Ok(allocation_units), Ok(sizes), Ok(used)) =
+        (&storage_types, &allocation_units, &sizes, &used)
     {
         usage.disk = aggregate_storage_usage(
-            &storage_types,
-            &allocation_units,
-            &sizes,
-            &used,
+            storage_types,
+            allocation_units,
+            sizes,
+            used,
             StorageKind::FixedDisk,
         );
         usage.memory = aggregate_storage_usage(
-            &storage_types,
-            &allocation_units,
-            &sizes,
-            &used,
+            storage_types,
+            allocation_units,
+            sizes,
+            used,
             StorageKind::Ram,
         );
+        for (kind, available, group) in [
+            (StorageKind::FixedDisk, usage.disk.is_some(), "storage"),
+            (StorageKind::Ram, usage.memory.is_some(), "memory"),
+        ] {
+            if !available && storage_types.values().any(|value| kind.matches(value)) {
+                usage.collection_issues.push(json!({
+                    "group": group, "oid": OID_HR_STORAGE_USED, "code": "SNMP_TABLE_INCOMPLETE",
+                }));
+            }
+        }
     }
     usage
 }
@@ -1432,32 +2242,23 @@ fn aggregate_storage_usage(
     used: &std::collections::HashMap<u32, String>,
     kind: StorageKind,
 ) -> Option<(f64, f64)> {
-    let mut total_used = 0.0;
-    let mut total_size = 0.0;
-    for (index, storage_type) in storage_types {
-        if !kind.matches(storage_type) {
-            continue;
-        }
-        let (Some(unit), Some(size), Some(used_units)) = (
-            allocation_units
-                .get(index)
-                .and_then(|value| parse_snmp_number(value).ok()),
-            sizes
-                .get(index)
-                .and_then(|value| parse_snmp_number(value).ok()),
-            used.get(index)
-                .and_then(|value| parse_snmp_number(value).ok()),
-        ) else {
-            continue;
-        };
-        if unit <= 0.0 || size < 0.0 || used_units < 0.0 {
-            continue;
-        }
-        total_size += unit * size;
-        total_used += unit * used_units;
-    }
-    (total_size > 0.0 && total_used.is_finite() && total_size.is_finite())
-        .then_some((total_used, total_size))
+    let numeric = |values: &std::collections::HashMap<u32, String>| {
+        values
+            .iter()
+            .filter_map(|(index, value)| parse_snmp_number(value).ok().map(|value| (*index, value)))
+            .collect()
+    };
+    aggregate_storage_kind(
+        match kind {
+            StorageKind::FixedDisk => "disk",
+            StorageKind::Ram => "ram",
+        },
+        storage_types,
+        &numeric(allocation_units),
+        &numeric(sizes),
+        &numeric(used),
+    )
+    .map(|(total, used)| (used, total))
 }
 
 async fn snmp_walk_values(
@@ -1468,7 +2269,93 @@ async fn snmp_walk_values(
     timeout_ms: u64,
     retries: u64,
     oid: &str,
-) -> Option<std::collections::HashMap<u32, String>> {
+) -> Result<std::collections::HashMap<u32, String>, TaskError> {
+    snmp_walk_values_until(
+        context,
+        task,
+        target,
+        port,
+        (timeout_ms, retries),
+        oid,
+        None,
+    )
+    .await
+}
+
+async fn snmp_walk_values_until(
+    context: &TaskContext,
+    task: &TaskLease,
+    target: IpAddr,
+    port: u16,
+    request: (u64, u64),
+    oid: &str,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<std::collections::HashMap<u32, String>, TaskError> {
+    let (values, limit) =
+        snmp_walk_values_partial_until(context, task, target, port, request, oid, deadline).await?;
+    if let Some(limit) = limit {
+        return Err(TaskError::failed(
+            limit.diagnostic_code(),
+            limit.to_string(),
+        ));
+    }
+    Ok(values)
+}
+
+async fn snmp_walk_values_partial_until(
+    context: &TaskContext,
+    task: &TaskLease,
+    target: IpAddr,
+    port: u16,
+    request: (u64, u64),
+    oid: &str,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<
+    (
+        std::collections::HashMap<u32, String>,
+        Option<TableWalkFailure>,
+    ),
+    TaskError,
+> {
+    let (output, limit) = snmp_walk_partial_until(
+        context,
+        task,
+        target,
+        port,
+        request,
+        oid,
+        deadline,
+        DEFAULT_TABLE_MAX_ROWS,
+    )
+    .await?;
+    let values = parse_snmp_walk_values(&output, oid);
+    if values.is_empty() {
+        return Err(TaskError::failed(
+            if output.to_ascii_lowercase().contains("no such")
+                || output.to_ascii_lowercase().contains("no more variables")
+            {
+                "SNMP_UNSUPPORTED"
+            } else {
+                "SNMP_PARSE_FAILED"
+            },
+            "SNMP table returned no usable rows",
+        ));
+    }
+    Ok((values, limit))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn snmp_walk_partial_until(
+    context: &TaskContext,
+    task: &TaskLease,
+    target: IpAddr,
+    port: u16,
+    request: (u64, u64),
+    oid: &str,
+    deadline: Option<tokio::time::Instant>,
+    max_rows: usize,
+) -> Result<(String, Option<TableWalkFailure>), TaskError> {
+    let (timeout_ms, retries) = request;
     let mut args = snmp_arguments(
         &task.payload,
         &task.secrets,
@@ -1477,22 +2364,59 @@ async fn snmp_walk_values(
         timeout_ms,
         retries,
         &[],
-    )
-    .ok()?;
+    )?;
     args.retain(|argument| argument != "-Oqv");
     args.push(oid.to_owned());
-    let duration =
-        Duration::from_millis(timeout_ms.saturating_mul(retries + 1).saturating_add(2_000))
-            .min(Duration::from_secs(12));
-    let output = timeout(duration, context.command_executor.run("snmpwalk", &args))
-        .await
-        .ok()?
-        .ok()?;
-    if !output.success || output.stdout.len() > MAX_SNMP_WALK_BYTES {
-        return None;
+    let policy = TableWalkPolicy::new(
+        task.payload
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("2c"),
+        max_rows,
+    );
+    let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + policy.timeout);
+    if tokio::time::Instant::now() >= deadline {
+        return Err(TaskError::failed(
+            "SNMP_TIMEOUT",
+            "SNMP table group deadline expired",
+        ));
     }
-    let output = std::str::from_utf8(&output.stdout).ok()?;
-    Some(parse_snmp_walk_values(output, oid))
+    let mut attempt = policy.initial();
+    let output = loop {
+        let attempt_args = attempt.args(&args);
+        let result = context
+            .command_executor
+            .run_table_partial(attempt.program(), &attempt_args, policy, deadline)
+            .await;
+        let failure = match result {
+            Ok(output) if output.success || output.limit.is_some() => break output,
+            Ok(output) => classify_table_failure(&[output.stdout, output.stderr].concat()),
+            Err(error) => error,
+        };
+        if let Some(next) = policy.retry_after(attempt, failure) {
+            attempt = next;
+        } else {
+            return Err(TaskError::failed(
+                failure.diagnostic_code(),
+                failure.to_string(),
+            ));
+        }
+    };
+    let limit = output.limit;
+    let output = std::str::from_utf8(&output.stdout)
+        .map_err(|_| TaskError::failed("SNMP_PARSE_FAILED", "SNMP table was not UTF-8"))?;
+    if output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        > max_rows
+    {
+        return Err(TaskError::failed(
+            "SNMP_RESPONSE_LIMIT",
+            "SNMP table exceeded row limit",
+        ));
+    }
+    Ok((output.to_owned(), limit))
 }
 
 fn parse_snmp_walk_values(output: &str, oid: &str) -> std::collections::HashMap<u32, String> {
@@ -1509,7 +2433,7 @@ fn parse_snmp_walk_values(output: &str, oid: &str) -> std::collections::HashMap<
         let Ok(index) = suffix.parse::<u32>() else {
             continue;
         };
-        values.insert(index, value.trim().to_owned());
+        values.insert(index, value.trim().chars().take(256).collect());
     }
     values
 }
@@ -1523,6 +2447,7 @@ struct SnmpPollEntry {
     value_type: String,
     required: bool,
     labels: Option<Map<String, Value>>,
+    transform: Option<Transform>,
 }
 
 fn snmp_poll_plan(value: Option<&Value>) -> Result<Vec<SnmpPollEntry>, TaskError> {
@@ -1580,6 +2505,14 @@ fn snmp_poll_plan(value: Option<&Value>) -> Result<Vec<SnmpPollEntry>, TaskError
                 value_type: value_type.to_owned(),
                 required,
                 labels: entry.get("labels").and_then(Value::as_object).cloned(),
+                transform: entry
+                    .get("transform")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        serde_json::from_value(value.clone())
+                            .map_err(|_| TaskError::invalid("pollPlan transform is invalid"))
+                    })
+                    .transpose()?,
             })
         })
         .collect()
@@ -1701,30 +2634,15 @@ fn parse_snmp_output(
     }
     lines
         .into_iter()
-        .zip(poll_plan)
-        .map(|(line, entry)| match parse_snmp_number(line) {
+        .map(|line| match parse_snmp_number(line) {
             Ok(value) => Ok(Some(value)),
-            Err(error)
-                if matches!(
-                    error.code.as_str(),
-                    "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
-                ) && !entry.required =>
-            {
-                Ok(None)
-            }
             Err(error)
                 if matches!(
                     error.code.as_str(),
                     "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
                 ) =>
             {
-                Err(TaskError::failed(
-                    "SNMP_REQUIRED_METRIC_UNAVAILABLE",
-                    format!(
-                        "required metric '{}' (OID {}) is unavailable or unusable",
-                        entry.metric_key, entry.oid
-                    ),
-                ))
+                Ok(None)
             }
             Err(error) => Err(error),
         })
@@ -1825,6 +2743,33 @@ fn parse_snmp_number(line: &str) -> Result<f64, TaskError> {
 fn scale_snmp_value(value: f64, scale: f64) -> Option<f64> {
     let scaled = value * scale;
     scaled.is_finite().then_some(scaled)
+}
+
+fn transform_snmp_values(plan: &[SnmpPollEntry], raw: &[Option<f64>]) -> Vec<Option<f64>> {
+    plan.iter()
+        .zip(raw)
+        .map(|(entry, raw_value)| {
+            let related = match entry.transform.as_ref() {
+                Some(
+                    Transform::Percentage { total_metric }
+                    | Transform::UsedFromTotal { total_metric }
+                    | Transform::UsedFromFree { total_metric },
+                ) => plan.iter().zip(raw).find_map(|(candidate, value)| {
+                    (candidate.metric_key == *total_metric)
+                        .then_some(*value)
+                        .flatten()
+                        .and_then(|value| scale_snmp_value(value, candidate.scale))
+                }),
+                _ => None,
+            };
+            apply_numeric_transform(
+                (*raw_value)?,
+                entry.scale,
+                entry.transform.as_ref(),
+                related,
+            )
+        })
+        .collect()
 }
 
 fn numeric_oid(value: &str) -> bool {
@@ -2148,6 +3093,161 @@ mod tests {
     struct SequenceMockExecutor {
         outputs: Mutex<VecDeque<CommandOutput>>,
         calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    struct StorageMockExecutor {
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+        index: std::sync::atomic::AtomicU32,
+        used: std::sync::atomic::AtomicU32,
+    }
+
+    struct StandardMockExecutor {
+        rows: usize,
+    }
+
+    struct ProfileTableMockExecutor {
+        calls: Mutex<Vec<String>>,
+        used: std::sync::atomic::AtomicU32,
+        index: std::sync::atomic::AtomicU32,
+    }
+
+    impl CommandExecutor for ProfileTableMockExecutor {
+        fn run<'a>(
+            &'a self,
+            program: &'a str,
+            args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                if program == "snmpget" {
+                    return Ok(CommandOutput {
+                        success: true,
+                        stdout: b"10000\n128\n".to_vec(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let oid = args.last().unwrap();
+                self.calls.lock().unwrap().push(oid.clone());
+                let value = match oid.as_str() {
+                    "1.3.6.1.4.1.999.10.1" => "STRING: \"Data volume\"".to_string(),
+                    "1.3.6.1.4.1.999.10.2" => {
+                        format!("Gauge32: {}", self.used.load(Ordering::SeqCst))
+                    }
+                    "1.3.6.1.4.1.999.10.3" => "Gauge32: 10".to_string(),
+                    _ => {
+                        return Ok(CommandOutput {
+                            success: true,
+                            stdout: b"No Such Object available\n".to_vec(),
+                            stderr: Vec::new(),
+                        })
+                    }
+                };
+                let index = self.index.load(Ordering::SeqCst);
+                Ok(CommandOutput {
+                    success: true,
+                    stdout: format!(".{oid}.7.{index} = {value}\n").into_bytes(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn profile_table_plan() -> Value {
+        json!([{
+            "name": "volumes", "baseOid": "1.3.6.1.4.1.999.10", "indexStrategy": "suffix", "maxRows": 128,
+            "columns": [
+                { "name": "name", "oidSuffix": "1", "unit": "text", "scale": 1.0, "valueType": "STRING" },
+                { "name": "used", "oidSuffix": "2", "metricKey": "filesystem.used_bytes", "unit": "bytes", "scale": 1024.0, "valueType": "GAUGE" },
+                { "name": "total", "oidSuffix": "3", "metricKey": "filesystem.total_bytes", "unit": "bytes", "scale": 1024.0, "valueType": "GAUGE" },
+            ],
+        }])
+    }
+
+    impl CommandExecutor for StandardMockExecutor {
+        fn run<'a>(
+            &'a self,
+            program: &'a str,
+            args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                if program == "snmpget" {
+                    return Ok(CommandOutput {
+                        success: true,
+                        stdout: b"10000\n128\n".to_vec(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let oid = args.last().unwrap();
+                let Some(spec) = STANDARD_TABLES.iter().find(|spec| spec.oid == oid) else {
+                    return Ok(CommandOutput {
+                        success: true,
+                        stdout: b"No Such Object available\n".to_vec(),
+                        stderr: Vec::new(),
+                    });
+                };
+                let value = match spec.key {
+                    "if.hc_in" => "Counter64: 1000",
+                    "if.hc_out" => "Counter64: 2000",
+                    "if.in" | "if.out" => "Counter32: 12",
+                    "if.status" | "sensor.status" => "INTEGER: 1",
+                    "if.high_speed" => "Gauge32: 1000",
+                    "if.speed" => "Gauge32: 1000000000",
+                    "if.in_errors" | "if.out_errors" => "Counter32: 0",
+                    "sensor.type" => "INTEGER: 8",
+                    "sensor.scale" => "INTEGER: 9",
+                    "sensor.precision" => "INTEGER: 1",
+                    "sensor.value" => "INTEGER: 250",
+                    "entity.class" => "INTEGER: 3",
+                    _ => "STRING: \"synthetic component\"",
+                };
+                Ok(CommandOutput {
+                    success: true,
+                    stdout: (1..=self.rows)
+                        .map(|index| format!(".{oid}.{index} = {value}\n"))
+                        .collect::<String>()
+                        .into_bytes(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    impl CommandExecutor for StorageMockExecutor {
+        fn run<'a>(
+            &'a self,
+            program: &'a str,
+            args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((program.to_owned(), args.to_vec()));
+            let oid = args.last().unwrap().clone();
+            let index = self.index.load(Ordering::SeqCst);
+            let used = self.used.load(Ordering::SeqCst);
+            Box::pin(async move {
+                let value = match oid.as_str() {
+                    OID_HR_STORAGE_TYPE => "OID: 1.3.6.1.2.1.25.2.1.4",
+                    OID_HR_STORAGE_ALLOC_UNITS => "INTEGER: 1024",
+                    OID_HR_STORAGE_SIZE => "INTEGER: 100",
+                    OID_HR_STORAGE_USED => "",
+                    OID_HR_PROCESSOR_LOAD => "INTEGER: 12",
+                    _ => return Err(anyhow::anyhow!("unexpected test OID")),
+                };
+                Ok(CommandOutput {
+                    success: true,
+                    stdout: format!(
+                        ".{oid}.{index} = {}\n",
+                        if oid == OID_HR_STORAGE_USED {
+                            format!("INTEGER: {used}")
+                        } else {
+                            value.to_owned()
+                        }
+                    )
+                    .into_bytes(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
     }
 
     impl CommandExecutor for SequenceMockExecutor {
@@ -2633,6 +3733,7 @@ mod tests {
                 value_type: "GAUGE".into(),
                 required: false,
                 labels: None,
+                transform: None,
             },
             SnmpPollEntry {
                 oid: "1.3.6.1.2.1.2.1.0".into(),
@@ -2642,6 +3743,7 @@ mod tests {
                 value_type: "GAUGE".into(),
                 required: false,
                 labels: None,
+                transform: None,
             },
             SnmpPollEntry {
                 oid: "1.3.6.1.2.1.25.2.2.0".into(),
@@ -2651,6 +3753,7 @@ mod tests {
                 value_type: "GAUGE".into(),
                 required: false,
                 labels: None,
+                transform: None,
             },
         ];
         assert_eq!(
@@ -2664,7 +3767,7 @@ mod tests {
     }
 
     #[test]
-    fn fails_for_unavailable_required_metrics_without_echoing_device_values() {
+    fn preserves_other_samples_when_required_metrics_are_unavailable() {
         let poll_plan = [SnmpPollEntry {
             oid: "1.3.6.1.2.1.1.3.0".into(),
             metric_key: "system.uptime.seconds".into(),
@@ -2673,14 +3776,12 @@ mod tests {
             value_type: "GAUGE".into(),
             required: true,
             labels: None,
+            transform: None,
         }];
-        let error =
-            parse_snmp_output(b"STRING: \"private device description\"\n", &poll_plan).unwrap_err();
-
-        assert_eq!(error.code, "SNMP_REQUIRED_METRIC_UNAVAILABLE");
-        assert!(error.message.contains("system.uptime.seconds"));
-        assert!(error.message.contains("1.3.6.1.2.1.1.3.0"));
-        assert!(!error.message.contains("private device description"));
+        assert_eq!(
+            parse_snmp_output(b"STRING: \"private device description\"\n", &poll_plan).unwrap(),
+            vec![None],
+        );
     }
 
     #[test]
@@ -2712,6 +3813,52 @@ mod tests {
             aggregate_storage_usage(&storage_type, &units, &size, &used, StorageKind::FixedDisk),
             Some((1_024_000.0, 4_096_000.0))
         );
+    }
+
+    #[tokio::test]
+    async fn table_failures_keep_valid_scalar_samples_and_report_safe_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: b"200\n2\n".to_vec(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let outcome = collect_snmp(&context, &snmp_task("192.168.1.20"))
+            .await
+            .unwrap();
+        assert_eq!(outcome["sampleCount"], 2);
+        assert_eq!(outcome["partial"], true);
+        let expected_oids = STANDARD_TABLES
+            .iter()
+            .map(|spec| spec.oid)
+            .chain([
+                OID_HR_STORAGE_TYPE,
+                OID_HR_STORAGE_ALLOC_UNITS,
+                OID_HR_STORAGE_SIZE,
+                OID_HR_STORAGE_USED,
+                OID_HR_PROCESSOR_LOAD,
+            ])
+            .collect::<std::collections::BTreeSet<_>>();
+        let issues = outcome["collectionIssues"].as_array().unwrap();
+        assert_eq!(issues.len(), expected_oids.len());
+        assert_eq!(
+            issues
+                .iter()
+                .filter_map(|issue| issue["oid"].as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_oids
+        );
+        assert_eq!(outcome["collectionIssues"][0]["code"], "SNMP_PARSE_FAILED");
+        assert!(!serde_json::to_string(&outcome)
+            .unwrap()
+            .contains("very-secret"));
+        let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+        assert_eq!(batch["samples"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -2818,6 +3965,40 @@ mod tests {
         assert!(args
             .iter()
             .any(|argument| argument == "udp6:[2001:db8::20]:161"));
+    }
+
+    #[tokio::test]
+    async fn discovery_reports_capabilities_without_spooling_telemetry() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: b"No Such Object available on this agent at this OID\nNo Such Object available on this agent at this OID\n".to_vec(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let mut task = snmp_task("192.168.1.209");
+        task.payload.insert("discoveryOnly".into(), json!(true));
+        task.payload
+            .insert("discoveryToken".into(), json!("discovery-token"));
+        let outcome = collect_snmp(&context, &task).await.unwrap();
+        assert_eq!(outcome["discoveryOnly"], true);
+        assert!(outcome.get("sampleCount").is_none());
+        assert!(context.telemetry_spool.oldest::<Value>().unwrap().is_none());
+        let report = &outcome["capabilityReport"];
+        assert!(sadapp_snmp_profile_engine::capability_discovery::validate_report(report).is_ok());
+        let scalar = report["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["columns"].as_array().unwrap())
+            .find(|column| column["oid"] == "1.3.6.1.2.1.2.1.0")
+            .unwrap();
+        assert_eq!(scalar["status"], "unsupported");
+        assert!(!report.to_string().contains("very-secret"));
     }
 
     #[tokio::test]
@@ -3008,7 +4189,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spools_available_snmp_metrics_when_an_optional_oid_is_missing() {
+    async fn spools_available_snmp_metrics_when_a_required_oid_is_missing() {
         let directory = tempfile::tempdir().unwrap();
         let executor = Arc::new(MockExecutor {
             output: CommandOutput {
@@ -3020,12 +4201,13 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let context = test_context(directory.path(), executor);
-        let outcome = collect_snmp(&context, &snmp_task("192.168.1.20"))
-            .await
-            .unwrap();
+        let mut task = snmp_task("192.168.1.20");
+        task.payload.get_mut("pollPlan").unwrap()[1]["required"] = json!(true);
+        let outcome = collect_snmp(&context, &task).await.unwrap();
         assert_eq!(outcome["sampleCount"], 1);
         assert_eq!(outcome["partial"], true);
         assert_eq!(outcome["missingMetrics"][0]["metricKey"], "interface.count");
+        assert_eq!(outcome["missingMetrics"][0]["required"], true);
         let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
         assert_eq!(batch["samples"].as_array().unwrap().len(), 1);
         assert_eq!(batch["samples"][0]["metricKey"], "uptime");
@@ -3058,5 +4240,408 @@ mod tests {
             executor.calls.lock().unwrap().len(),
             calls_after_private_target
         );
+    }
+
+    #[tokio::test]
+    async fn wholly_unavailable_metrics_fail_without_spooling_zero_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = test_context(
+            directory.path(),
+            Arc::new(MockExecutor {
+                output: CommandOutput {
+                    success: true,
+                    stdout: b"No Such Object available\nNo Such Object available\n".to_vec(),
+                    stderr: Vec::new(),
+                },
+                error: None,
+                calls: Mutex::new(Vec::new()),
+            }),
+        );
+        let error = collect_snmp(&context, &snmp_task("192.168.1.20"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "SNMP_NO_METRICS");
+        assert!(context.telemetry_spool.oldest::<Value>().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn snmp_tables_reduce_bulk_size_and_fall_back_without_changing_deadline_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let too_big = CommandOutput {
+            success: false,
+            stdout: Vec::new(),
+            stderr: b"tooBig".to_vec(),
+        };
+        let executor = Arc::new(SequenceMockExecutor {
+            outputs: Mutex::new(VecDeque::from([
+                too_big.clone(),
+                too_big,
+                CommandOutput {
+                    success: true,
+                    stdout: format!(".{OID_HR_STORAGE_SIZE}.1 = INTEGER: 100\n").into_bytes(),
+                    stderr: Vec::new(),
+                },
+            ])),
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor.clone());
+        let values = snmp_walk_values(
+            &context,
+            &snmp_task("192.168.1.20"),
+            "192.168.1.20".parse().unwrap(),
+            161,
+            1000,
+            1,
+            OID_HR_STORAGE_SIZE,
+        )
+        .await
+        .unwrap();
+        assert_eq!(values.get(&1).map(String::as_str), Some("INTEGER: 100"));
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert!(calls[0].iter().any(|arg| arg == "-Cr10"));
+        assert!(calls[1].iter().any(|arg| arg == "-Cr5"));
+        assert!(!calls[2].iter().any(|arg| arg.starts_with("-Cr")));
+    }
+
+    #[tokio::test]
+    async fn snmp_v1_tables_use_getnext_and_row_limits_do_not_truncate_to_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: (0..=DEFAULT_TABLE_MAX_ROWS)
+                    .map(|index| format!(".{OID_HR_STORAGE_SIZE}.{index} = INTEGER: 100\n"))
+                    .collect::<String>()
+                    .into_bytes(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor.clone());
+        let mut task = snmp_task("192.168.1.20");
+        task.payload.insert("version".into(), json!("1"));
+        let error = snmp_walk_values(
+            &context,
+            &task,
+            "192.168.1.20".parse().unwrap(),
+            161,
+            1000,
+            1,
+            OID_HR_STORAGE_SIZE,
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.message.contains("very-secret"));
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(!calls[0].iter().any(|arg| arg.starts_with("-Cr")));
+    }
+
+    #[tokio::test]
+    async fn snmp_discovery_caches_only_metadata_and_refreshes_after_reboot_index_or_profile_changes(
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(StorageMockExecutor {
+            calls: Mutex::new(Vec::new()),
+            index: std::sync::atomic::AtomicU32::new(1),
+            used: std::sync::atomic::AtomicU32::new(25),
+        });
+        let context = test_context(directory.path(), executor.clone());
+        let mut task = snmp_task("192.168.1.201");
+        task.payload
+            .insert("serverId".into(), json!("metadata-cache-test"));
+        let target = "192.168.1.201".parse().unwrap();
+        let first =
+            poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(100.0)).await;
+        assert_eq!(first.disk, Some((25600.0, 102400.0)));
+        assert_eq!(executor.calls.lock().unwrap().len(), 5);
+        executor.used.store(50, Ordering::SeqCst);
+        let second =
+            poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(110.0)).await;
+        assert_eq!(second.disk, Some((51200.0, 102400.0)));
+        assert_eq!(executor.calls.lock().unwrap().len(), 8);
+        poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(1.0)).await;
+        assert_eq!(executor.calls.lock().unwrap().len(), 13);
+        executor.index.store(2, Ordering::SeqCst);
+        poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(2.0)).await;
+        assert_eq!(executor.calls.lock().unwrap().len(), 18);
+        task.payload.get_mut("profile").unwrap()["checksum"] = json!("b".repeat(64));
+        poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(3.0)).await;
+        assert_eq!(executor.calls.lock().unwrap().len(), 23);
+        task.secrets
+            .insert("community-1".into(), "rotated-test-secret".into());
+        poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, Some(4.0)).await;
+        assert_eq!(executor.calls.lock().unwrap().len(), 28);
+        poll_snmp_host_resources(&context, &task, target, 161, 1000, 1, None).await;
+        assert_eq!(executor.calls.lock().unwrap().len(), 33);
+        assert!(executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(program, _)| program == "snmpbulkwalk"));
+    }
+
+    #[test]
+    fn snmp_scalar_transforms_match_shared_worker_semantics() {
+        let plan = snmp_poll_plan(Some(&json!([
+            { "oid": "1.2.3.0", "metricKey": "memory.free", "scale": 1024, "valueType": "GAUGE", "transform": { "operation": "used_from_free", "total_metric": "memory.total" } },
+            { "oid": "1.2.4.0", "metricKey": "memory.total", "scale": 1024, "valueType": "GAUGE" },
+            { "oid": "1.2.5.0", "metricKey": "cpu.usage", "scale": 1, "valueType": "GAUGE", "transform": { "operation": "offset", "value": 2 } }
+        ]))).unwrap();
+        assert_eq!(
+            transform_snmp_values(&plan, &[Some(25.0), Some(100.0), Some(10.0)]),
+            vec![Some(76800.0), Some(102400.0), Some(12.0)]
+        );
+        assert_eq!(
+            transform_snmp_values(&plan, &[Some(25.0), None, Some(10.0)]),
+            vec![None, None, Some(12.0)]
+        );
+    }
+
+    #[test]
+    fn incomplete_disk_rows_never_become_a_successful_whole_host_subtotal() {
+        let types = HashMap::from([
+            (1, OID_HR_STORAGE_TYPE_FIXED_DISK.to_owned()),
+            (2, OID_HR_STORAGE_TYPE_FIXED_DISK.to_owned()),
+        ]);
+        let units = HashMap::from([(1, "1024".into()), (2, "1024".into())]);
+        let sizes = HashMap::from([(1, "100".into()), (2, "200".into())]);
+        let mut used = HashMap::from([(1, "25".into())]);
+        assert_eq!(
+            aggregate_storage_usage(&types, &units, &sizes, &used, StorageKind::FixedDisk),
+            None
+        );
+        used.insert(2, "201".into());
+        assert_eq!(
+            aggregate_storage_usage(&types, &units, &sizes, &used, StorageKind::FixedDisk),
+            None
+        );
+        used.insert(2, "50".into());
+        assert_eq!(
+            aggregate_storage_usage(&types, &units, &sizes, &used, StorageKind::FixedDisk),
+            Some((76800.0, 307200.0))
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_tables_keep_composite_indexes_live_values_and_cached_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(ProfileTableMockExecutor {
+            calls: Mutex::new(Vec::new()),
+            used: std::sync::atomic::AtomicU32::new(3),
+            index: std::sync::atomic::AtomicU32::new(8),
+        });
+        let context = test_context(directory.path(), executor.clone());
+        let mut task = snmp_task("192.168.1.203");
+        task.payload
+            .insert("serverId".into(), json!("profile-cache-fixture"));
+        let plans: Vec<TablePlan> = serde_json::from_value(profile_table_plan()).unwrap();
+        validate_plans(&plans).unwrap();
+        let poll = |uptime| {
+            let (context, task, plans) = (&context, &task, &plans);
+            async move {
+                poll_snmp_profile_tables(
+                    context,
+                    task,
+                    "192.168.1.203".parse().unwrap(),
+                    161,
+                    (1000, 0),
+                    Some(uptime),
+                    plans,
+                    &mut CapabilityRecorder::new(),
+                )
+                .await
+            }
+        };
+        let (first, issues) = poll(100.0).await;
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(first.metrics.len(), 2);
+        assert!(first
+            .metrics
+            .iter()
+            .any(|metric| metric.value == 3072.0 && metric.labels["table_index"] == "7.8"));
+        assert_eq!(first.inventory[0].name, "Data volume");
+        executor.used.store(4, Ordering::SeqCst);
+        let (second, issues) = poll(101.0).await;
+        assert!(issues.is_empty());
+        assert!(second.metrics.iter().any(|metric| metric.value == 4096.0));
+        assert_eq!(
+            executor
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|oid| oid.ends_with(".10.1"))
+                .count(),
+            1
+        );
+        poll(1.0).await;
+        assert_eq!(
+            executor
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|oid| oid.ends_with(".10.1"))
+                .count(),
+            2
+        );
+        executor.index.store(9, Ordering::SeqCst);
+        let (changed, issues) = poll(2.0).await;
+        assert!(issues.is_empty());
+        assert!(changed
+            .metrics
+            .iter()
+            .all(|metric| metric.labels["table_index"] == "7.9"));
+        assert_eq!(
+            executor
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|oid| oid.ends_with(".10.1"))
+                .count(),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_tables_upload_supplemental_metrics_and_inventory_without_duplicate_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(ProfileTableMockExecutor {
+            calls: Mutex::new(Vec::new()),
+            used: std::sync::atomic::AtomicU32::new(3),
+            index: std::sync::atomic::AtomicU32::new(8),
+        });
+        let context = test_context(directory.path(), executor.clone());
+        let mut task = snmp_task("192.168.1.204");
+        task.payload.remove("detectionBundle");
+        task.payload
+            .insert("tablePlans".into(), profile_table_plan());
+        let result = collect_snmp(&context, &task).await.unwrap();
+        let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+        assert_eq!(
+            batch["samples"].as_array().unwrap().len(),
+            result["sampleCount"].as_u64().unwrap() as usize
+        );
+        let supplemental = batch["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|sample| sample["metadata"]["source"] == "SNMP-profile-tables")
+            .collect::<Vec<_>>();
+        assert_eq!(supplemental.len(), 2);
+        assert!(supplemental
+            .iter()
+            .all(|sample| sample["metadata"]["legacyProjection"] == false));
+        assert_eq!(batch["inventory"][0]["category"], "snmp.profile");
+        assert_eq!(
+            batch["inventory"][0]["payload"]["entries"][0]["index"],
+            "7.8"
+        );
+        let before = executor.calls.lock().unwrap().len();
+        task.payload["tablePlans"][0]["baseOid"] = json!("-c public");
+        assert!(collect_snmp(&context, &task).await.is_err());
+        assert_eq!(executor.calls.lock().unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn profile_table_row_limits_preserve_complete_rows_with_explicit_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(SequenceMockExecutor {
+            outputs: Mutex::new(VecDeque::from([CommandOutput {
+                success: true,
+                stdout: b".1.3.6.1.4.1.999.10.2.7.8 = Gauge32: 3\n.1.3.6.1.4.1.999.10.2.7.9 = Gauge32: 4\n".to_vec(),
+                stderr: Vec::new(),
+            }])),
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let task = snmp_task("192.168.1.205");
+        let mut plans: Vec<TablePlan> = serde_json::from_value(profile_table_plan()).unwrap();
+        plans[0].max_rows = 1;
+        plans[0].columns.retain(|column| column.name == "used");
+        let (snapshot, issues) = poll_snmp_profile_tables(
+            &context,
+            &task,
+            "192.168.1.205".parse().unwrap(),
+            161,
+            (1000, 0),
+            Some(100.0),
+            &plans,
+            &mut CapabilityRecorder::new(),
+        )
+        .await;
+        assert_eq!(snapshot.metrics.len(), 1);
+        assert_eq!(snapshot.metrics[0].value, 3072.0);
+        assert_eq!(snapshot.metrics[0].labels["table_index"], "7.8");
+        assert!(issues
+            .iter()
+            .any(|issue| issue["code"] == "SNMP_RESPONSE_LIMIT"));
+    }
+
+    #[tokio::test]
+    async fn standard_tables_spool_canonical_sensors_interfaces_and_inventory_in_bounded_batches() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut context = test_context(
+            directory.path(),
+            Arc::new(StandardMockExecutor { rows: 128 }),
+        );
+        context.telemetry_spool =
+            Spool::open(directory.path(), "telemetry", 10, 4 * 1024 * 1024).unwrap();
+        let mut task = snmp_task("192.168.1.202");
+        task.payload.remove("detectionBundle");
+        task.payload
+            .insert("serverId".into(), json!("standard-spool-fixture"));
+        let result = collect_snmp(&context, &task).await.unwrap();
+        let mut samples = Vec::new();
+        let mut inventory = Vec::new();
+        let mut batches = 0;
+        while let Some((path, batch)) = context.telemetry_spool.oldest::<Value>().unwrap() {
+            let batch_samples = batch["samples"].as_array().unwrap();
+            let batch_inventory = batch["inventory"].as_array().unwrap();
+            assert!(batch_samples.len() + batch_inventory.len() <= 500);
+            if batches > 0 {
+                assert!(batch_samples
+                    .iter()
+                    .all(|sample| sample["metadata"]["legacyProjection"] == false));
+            }
+            samples.extend(batch_samples.clone());
+            inventory.extend(batch_inventory.clone());
+            batches += 1;
+            context.telemetry_spool.remove(&path).unwrap();
+        }
+        assert!(batches > 1);
+        assert_eq!(
+            samples.len(),
+            result["sampleCount"].as_u64().unwrap() as usize
+        );
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0]["category"], "snmp.standard");
+        assert_eq!(
+            inventory[0]["payload"]["entries"].as_array().unwrap().len(),
+            256
+        );
+        let counter = samples
+            .iter()
+            .find(|sample| {
+                sample["metricKey"] == "network.receive.bytes_total"
+                    && sample["labels"]["interface_index"] == "1"
+            })
+            .unwrap();
+        assert_eq!(counter["value"], 1000.0);
+        assert_eq!(counter["valueType"], "COUNTER");
+        assert!(samples.iter().any(
+            |sample| sample["metricKey"] == "hardware.temperature.celsius"
+                && sample["value"] == 25.0
+        ));
+        assert!(samples.iter().any(
+            |sample| sample["metricKey"] == "network.receive.bytes_total"
+                && sample["labels"].is_null()
+                && sample["value"] == 128000.0
+        ));
     }
 }
