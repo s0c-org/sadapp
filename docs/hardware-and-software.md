@@ -70,6 +70,12 @@ deletion. Graphs appear only on Overview. **Add check** is available
 in the page actions on every tab for editable, host-linked services.
 Numeric REST histories remain graphs when some observations are missing; gaps
 stay gaps and zero stays a valid reading. Text and boolean histories remain lists.
+Software Overview and History use the same compact history-window buttons as
+Hardware: **1 h**, **24 h** and **7 d**. The selected window updates response-time
+graphs, endpoint readings and recorded results, with chart bounds matching the
+requested interval. Software history is limited to seven days; Hardware's longer
+host-rollup windows are not available for software checks. Summary tiles retain
+their explicitly labeled 24-hour, 7-day and 30-day aggregation windows.
 
 The former `/servers` interface no longer renders a separate fleet or settings
 workspace. Its index redirects to Hardware, add redirects to onboarding, and host
