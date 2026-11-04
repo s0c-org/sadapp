@@ -76,6 +76,9 @@ and inline flow messages are preserved.
 
 ### Advanced provider defaults
 
+The **Transport text and limits** disclosure retains its expanded/collapsed state
+while an edited draft's preview refreshes.
+
 Open **Messages → Advanced provider defaults** to edit the existing personal fallback
 templates. These are separate from the named library.
 

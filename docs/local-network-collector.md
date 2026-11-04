@@ -130,6 +130,12 @@ newer than the selected reference are shown as ahead, not as needing a downgrade
 Lookup failures expose a retry. Hardware shows equivalent agent/collector status;
 its update count and filter apply to the currently loaded inventory page.
 Release references refresh every five minutes while the tab is visible.
+If repository metadata is unavailable, update status remains unknown; this does
+not mean collector checks or heartbeats have failed. **Retry version lookup**
+fetches metadata again without reusing an incomplete server-side lookup.
+If Debian and RPM versions actually differ, the warning lists both versions;
+verify the machine's package format in **Update instructions** rather than
+assuming either version applies. Queue and heartbeat data remain available.
 
 Tasks and discovery candidates initially show five entries each. Status filters
 and **Show all** expose the remaining snapshot without overwhelming the overview.
