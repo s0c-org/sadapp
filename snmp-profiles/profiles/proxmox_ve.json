@@ -11,7 +11,8 @@
   "detection": {
     "sys_object_id_prefixes": [],
     "sys_descr_regexes": [
-      "(?i)Proxmox"
+      "(?i)Proxmox",
+      "(?i)^Linux\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+[^\\s]*-pve(?:\\s|$)"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"

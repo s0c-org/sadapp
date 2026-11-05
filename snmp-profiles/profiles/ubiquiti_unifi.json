@@ -2,23 +2,25 @@
   "schema_version": 1,
   "profile_name": "ubiquiti-unifi",
   "display_name": "Ubiquiti UniFi",
-  "description": "UniFi network infrastructure and Cloud Key appliances; optional UCD-SNMP host metrics verified against a UCK G2 Plus walk, with UBNT-MIB wireless definitions",
+  "description": "UniFi infrastructure including Cloud Key, US-16-150W and U7 Lite identities; optional UCD-SNMP host metrics and UBNT-MIB wireless definitions. Detection support does not certify every metric on every model.",
   "vendor": "Ubiquiti",
   "device_classes": [
     "wireless",
-    "appliance"
+    "appliance",
+    "switch"
   ],
   "state": "experimental",
   "detection": {
     "sys_object_id_prefixes": [
-      "1.3.6.1.4.1.41112"
+      "1.3.6.1.4.1.41112",
+      "1.3.6.1.4.1.4413",
+      "1.3.6.1.4.1.8072.3.2.10"
     ],
     "sys_descr_regexes": [
-      "(?i)Ubiquiti",
-      "(?i)UniFi",
-      "(?i)airOS",
-      "(?i)EdgeOS",
-      "(?i)EdgeSwitch"
+      "(?i)^(?:Ubiquiti\\s+UniFi\\s+)?(?:Linux\\s+)?(?:UCKP|UCKG2PLUS|UCK[- ]G2[- ]PLUS|UCK[- ]G2|UCKG2)(?:[\\s,]|$)",
+      "(?i)^(?:Ubiquiti\\s+(?:Networks\\s+)?(?:UniFi\\s+)?)?(?:US[- ]16[- ]150W|US\\s+16\\s+PoE\\s+150W)(?:[\\s,]|$)",
+      "(?i)^(?:Ubiquiti\\s+(?:Networks\\s+)?(?:UniFi\\s+)?)?U7[- ]Lite(?:[\\s,]|$)",
+      "(?i)^(?:Ubiquiti(?:\\s+Networks)?(?:\\s+(?:UniFi|airOS|EdgeOS|EdgeSwitch))?|UniFi|airOS|EdgeOS|EdgeSwitch)(?:[\\s,]|$)"
     ],
     "required_oids": [
       "1.3.6.1.2.1.1.2.0"
