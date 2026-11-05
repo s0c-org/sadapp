@@ -3111,7 +3111,11 @@ mod tests {
         .to_string();
         assert!(error.contains("307"));
         let requests = server.join().unwrap();
-        assert!(requests[0].0.starts_with("POST /api/v1/agent?invite_token=synthetic-invite "));
+        assert!(
+            requests[0]
+                .0
+                .starts_with("POST /api/v1/agent?invite_token=synthetic-invite ")
+        );
         assert!(!requests[0].0.contains("x-agent-key"));
         for (headers, _) in &requests[1..] {
             assert!(!headers.contains("invite_token"));
