@@ -1,4 +1,4 @@
-FROM rust:1.99-bookworm AS builder
+FROM rust:1.99.1-trixie AS builder
 WORKDIR /build
 COPY local-network-collector/Cargo.toml local-network-collector/Cargo.lock ./local-network-collector/
 COPY local-network-collector/src ./local-network-collector/src
@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo build --locked --release
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 RUN apt-get update \
 	&& apt-get upgrade --yes \
 	&& apt-get install --no-install-recommends --yes ca-certificates curl iputils-ping snmp \

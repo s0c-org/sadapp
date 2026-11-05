@@ -4122,7 +4122,9 @@ mod tests {
 
     #[tokio::test]
     async fn detects_committed_unifi_models_and_proxmox_with_shared_worker_profiles() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let private_catalog = root.join("monitoring-worker/mibs");
         let catalog = if private_catalog.is_dir() {
             private_catalog
@@ -4130,29 +4132,61 @@ mod tests {
             root.join("snmp-profiles/profiles")
         };
         let profiles: Vec<DetectionProfile> = ["ubiquiti_unifi.json", "proxmox_ve.json"]
-        .into_iter()
-        .map(|filename| {
-            let source = std::fs::read_to_string(catalog.join(filename)).unwrap();
-            let raw: Value = serde_json::from_str(&source).unwrap();
-            serde_json::from_value(json!({
-                "profile_name": raw["profile_name"],
-                "schema_version": raw["schema_version"],
-                "state": raw["state"],
-                "detection": raw["detection"],
-            }))
-            .unwrap()
-        })
-        .collect();
+            .into_iter()
+            .map(|filename| {
+                let source = std::fs::read_to_string(catalog.join(filename)).unwrap();
+                let raw: Value = serde_json::from_str(&source).unwrap();
+                serde_json::from_value(json!({
+                    "profile_name": raw["profile_name"],
+                    "schema_version": raw["schema_version"],
+                    "state": raw["state"],
+                    "detection": raw["detection"],
+                }))
+                .unwrap()
+            })
+            .collect();
         let checksum = detection_bundle_checksum(&profiles).unwrap();
         for (object_id, description, expected) in [
-            ("1.3.6.1.4.1.8072.3.2.10", "Ubiquiti UniFi UCKP 6.0.11 Linux 3.18.44", "ubiquiti-unifi"),
-            ("1.3.6.1.4.1.4413", "US-16-150W, 7.1.26, Linux 3.6.5", "ubiquiti-unifi"),
-            ("1.3.6.1.4.1.41112", "U7-Lite, 8.0.24, Linux 5.4", "ubiquiti-unifi"),
-            ("1.3.6.1.4.1.8072.3.2.10", "Linux unifi-controller 6.8.0", "generic-host"),
-            ("1.3.6.1.4.1.4413", "Broadcom FASTPATH switch", "generic-host"),
-            ("1.3.6.1.4.1.8072.3.2.10", "Linux pveh3 6.8.12-11-pve #1 SMP PREEMPT_DYNAMIC PMX x86_64", "proxmox-ve"),
-            ("1.3.6.1.4.1.8072.3.2.10", "Linux pveh3 6.1.0-18-amd64 #1 SMP Debian x86_64", "generic-host"),
-            ("1.3.6.1.4.1.8072.3.2.10", "Linux host 6.8.12-pve-custom #1 SMP x86_64", "generic-host"),
+            (
+                "1.3.6.1.4.1.8072.3.2.10",
+                "Ubiquiti UniFi UCKP 6.0.11 Linux 3.18.44",
+                "ubiquiti-unifi",
+            ),
+            (
+                "1.3.6.1.4.1.4413",
+                "US-16-150W, 7.1.26, Linux 3.6.5",
+                "ubiquiti-unifi",
+            ),
+            (
+                "1.3.6.1.4.1.41112",
+                "U7-Lite, 8.0.24, Linux 5.4",
+                "ubiquiti-unifi",
+            ),
+            (
+                "1.3.6.1.4.1.8072.3.2.10",
+                "Linux unifi-controller 6.8.0",
+                "generic-host",
+            ),
+            (
+                "1.3.6.1.4.1.4413",
+                "Broadcom FASTPATH switch",
+                "generic-host",
+            ),
+            (
+                "1.3.6.1.4.1.8072.3.2.10",
+                "Linux pveh3 6.8.12-11-pve #1 SMP PREEMPT_DYNAMIC PMX x86_64",
+                "proxmox-ve",
+            ),
+            (
+                "1.3.6.1.4.1.8072.3.2.10",
+                "Linux pveh3 6.1.0-18-amd64 #1 SMP Debian x86_64",
+                "generic-host",
+            ),
+            (
+                "1.3.6.1.4.1.8072.3.2.10",
+                "Linux host 6.8.12-pve-custom #1 SMP x86_64",
+                "generic-host",
+            ),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let executor = Arc::new(SequenceMockExecutor {
