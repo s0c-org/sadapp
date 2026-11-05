@@ -4,7 +4,9 @@ COPY local-network-collector/Cargo.toml local-network-collector/Cargo.lock ./loc
 COPY local-network-collector/src ./local-network-collector/src
 COPY snmp-profile-engine ./snmp-profile-engine
 WORKDIR /build/local-network-collector
-RUN cargo build --locked --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

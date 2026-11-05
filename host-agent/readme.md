@@ -134,6 +134,9 @@ interrupt the polling wait, trigger one final heartbeat attempt, and leave faile
 persistent queue before exit.
 
 Failed heartbeats are persisted atomically and replayed oldest first, one per collection cycle.
+Heartbeat, replay, Docker, log, and update delivery share a process-lifetime HTTP client,
+allowing connection reuse without sharing request credentials. Redirects remain disabled,
+with a 15-second request timeout and a five-second connection timeout.
 Retries use exponential backoff with jitter. The queue keeps at most 200 samples by default and
 drops the oldest sample when full. Packaged installations create the state directory with mode
 0700; queue files use mode 0600. Override `API_QUEUE_PATH` for unprivileged manual runs.

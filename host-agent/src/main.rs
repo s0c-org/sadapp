@@ -3025,6 +3025,107 @@ mod tests {
     }
 
     #[test]
+    fn outbound_http_client_reuses_connections_without_retaining_authentication() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut requests = Vec::new();
+            for index in 0..3 {
+                let mut reader = std::io::BufReader::new(&mut socket);
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 0);
+                    headers.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(|value| value.parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                requests.push((headers, serde_json::from_slice::<Value>(&body).unwrap()));
+                let response = if index == 2 {
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: /must-not-follow\r\nContent-Length: 0\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                };
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        let endpoint = format!("http://{address}/api/v1/agent");
+        let invite_auth = AuthConfig {
+            invite_token: Some("synthetic-invite".into()),
+            key_id: Some("ignored-key".into()),
+            key_secret: Some("ignored-secret".into()),
+        };
+        let key_auth = AuthConfig {
+            invite_token: None,
+            key_id: Some("synthetic-key".into()),
+            key_secret: Some("synthetic-secret".into()),
+        };
+        send_status(
+            &endpoint,
+            &invite_auth,
+            &json!({"sequence": 1}),
+            LogLevel::Error,
+        )
+        .unwrap();
+        send_status(
+            &endpoint,
+            &key_auth,
+            &json!({"sequence": 2}),
+            LogLevel::Error,
+        )
+        .unwrap();
+        let docker = DockerMetrics {
+            collected_at: 123,
+            running_containers: 0,
+            stopped_containers: 0,
+            unhealthy_containers: 0,
+            engine_version: None,
+            disk_usage_bytes: None,
+            containers: Vec::new(),
+        };
+        let error = send_docker_metrics(
+            &endpoint,
+            &key_auth,
+            "test-host",
+            123,
+            &docker,
+            LogLevel::Error,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("307"));
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("POST /api/v1/agent?invite_token=synthetic-invite "));
+        assert!(!requests[0].0.contains("x-agent-key"));
+        for (headers, _) in &requests[1..] {
+            assert!(!headers.contains("invite_token"));
+            assert!(headers.contains("x-agent-key-id: synthetic-key\r\n"));
+            assert!(headers.contains("x-agent-key-secret: synthetic-secret\r\n"));
+        }
+        assert_eq!(requests[0].1, json!({"sequence": 1}));
+        assert_eq!(requests[1].1, json!({"sequence": 2}));
+        assert!(requests[2].0.starts_with("POST /api/v1/agent/docker "));
+        assert_eq!(requests[2].1["host_name"], "test-host");
+        assert_eq!(requests[2].1["timestamp"], 123);
+    }
+
+    #[test]
     fn request_failures_do_not_disclose_invitation_urls_or_response_secrets() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -4333,12 +4434,17 @@ fn send_status(
     }
 }
 
-fn outbound_http_client() -> Result<Client, reqwest::Error> {
-    Client::builder()
+fn outbound_http_client() -> Result<&'static Client, reqwest::Error> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(OUTBOUND_HTTP_TIMEOUT_SECONDS))
         .connect_timeout(Duration::from_secs(5))
-        .build()
+        .build()?;
+    Ok(CLIENT.get_or_init(|| client))
 }
 
 #[derive(Serialize)]
