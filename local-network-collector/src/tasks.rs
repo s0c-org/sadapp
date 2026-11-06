@@ -1413,6 +1413,57 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         })
     };
     let mut derived = Vec::new();
+    if !has_metric(&samples, &["system.memory.total_bytes"]) {
+        if let Some(mut sample) = samples
+            .iter()
+            .find(|sample| {
+                sample["metricKey"] == "system.memory.ucd_total_bytes"
+                    || sample["metricKey"] == "system.memory.fastpath_total_bytes"
+            })
+            .cloned()
+        {
+            sample["metricKey"] = json!("system.memory.total_bytes");
+            samples.push(sample);
+        }
+    }
+    let scalar_value = |keys: &[&str]| {
+        keys.iter().find_map(|key| {
+            samples.iter().find_map(|sample| {
+                (sample["metricKey"] == *key)
+                    .then(|| sample["value"].as_f64())
+                    .flatten()
+            })
+        })
+    };
+    if !has_metric(&samples, &["system.cpu.utilization"]) {
+        if let Some(idle) =
+            scalar_value(&["system.cpu.idle_percent"]).filter(|value| (0.0..=100.0).contains(value))
+        {
+            derived.push((
+                "system.cpu.utilization",
+                "percent",
+                100.0 - idle,
+                None,
+                "SNMP-scalars",
+            ));
+        }
+    }
+    if !has_metric(&samples, &["system.memory.used_bytes"]) {
+        if let (Some(total), Some(available)) = (
+            scalar_value(&["system.memory.total_bytes", "system.memory.ucd_total_bytes"]),
+            scalar_value(&["system.memory.available_bytes"]),
+        ) {
+            if total > 0.0 && (0.0..=total).contains(&available) {
+                derived.push((
+                    "system.memory.used_bytes",
+                    "bytes",
+                    total - available,
+                    None,
+                    "SNMP-scalars",
+                ));
+            }
+        }
+    }
     if let Some((disk_used, disk_total)) = host_resources.disk {
         let labels = json!({ "device": "snmp-fixed-disks" });
         derived.push((
@@ -1420,32 +1471,65 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
             "bytes",
             disk_used,
             Some(labels.clone()),
+            "HOST-RESOURCES-MIB",
         ));
-        derived.push(("filesystem.total_bytes", "bytes", disk_total, Some(labels)));
+        derived.push((
+            "filesystem.total_bytes",
+            "bytes",
+            disk_total,
+            Some(labels),
+            "HOST-RESOURCES-MIB",
+        ));
     }
     if let Some((memory_used, memory_total)) = host_resources.memory {
-        if !has_metric(
-            &samples,
-            &["system.memory.used_bytes", "system.memory.available_bytes"],
-        ) {
-            derived.push(("system.memory.used_bytes", "bytes", memory_used, None));
-        }
-        if !has_metric(
-            &samples,
-            &["system.memory.total_bytes", "system.memory.ucd_total_bytes"],
-        ) {
-            derived.push(("system.memory.total_bytes", "bytes", memory_total, None));
+        let valid_used = scalar_value(&["system.memory.used_bytes"])
+            .zip(scalar_value(&[
+                "system.memory.total_bytes",
+                "system.memory.ucd_total_bytes",
+            ]))
+            .filter(|(used, total)| *total > 0.0 && (0.0..=*total).contains(used));
+        if valid_used.is_none()
+            && !derived
+                .iter()
+                .any(|(key, ..)| *key == "system.memory.used_bytes")
+        {
+            derived.push((
+                "system.memory.used_bytes",
+                "bytes",
+                memory_used,
+                None,
+                "HOST-RESOURCES-MIB",
+            ));
+            derived.push((
+                "system.memory.total_bytes",
+                "bytes",
+                memory_total,
+                None,
+                "HOST-RESOURCES-MIB",
+            ));
         }
     }
     if let Some(cpu) = host_resources.cpu_utilization {
-        if !has_metric(
-            &samples,
-            &["system.cpu.utilization", "system.cpu.idle_percent"],
-        ) {
-            derived.push(("system.cpu.utilization", "percent", cpu, None));
+        if scalar_value(&["system.cpu.utilization"])
+            .filter(|value| (0.0..=100.0).contains(value))
+            .is_none()
+            && !derived
+                .iter()
+                .any(|(key, ..)| *key == "system.cpu.utilization")
+        {
+            derived.push((
+                "system.cpu.utilization",
+                "percent",
+                cpu,
+                None,
+                "HOST-RESOURCES-MIB",
+            ));
         }
     }
-    for (metric_key, unit, value, labels) in derived {
+    for (metric_key, unit, value, labels, source) in derived {
+        if source == "HOST-RESOURCES-MIB" && metric_key.starts_with("system.") {
+            samples.retain(|sample| sample["metricKey"] != metric_key);
+        }
         let mut sample = json!({
             "resource": resource,
             "collector": collector,
@@ -1455,7 +1539,7 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
             "observedAt": observed_at,
             "value": value,
             "quality": "GOOD",
-            "metadata": { "source": "HOST-RESOURCES-MIB" },
+            "metadata": { "source": source },
         });
         if let Some(labels) = labels {
             sample["labels"] = labels;
@@ -1929,7 +2013,7 @@ async fn poll_snmp_standard_tables(
                 }
             }
             Err(error) => issues.push(json!({
-                "group": if spec.key.starts_with("if.") { "interfaces" } else if spec.oid.starts_with("1.3.6.1.2.1.25.2.3.") { "storage" } else { "sensors" },
+                "group": standard_column_group(spec.key),
                 "oid": spec.oid, "code": error.code,
             })),
         }
@@ -2634,18 +2718,21 @@ fn parse_snmp_output(
     }
     lines
         .into_iter()
-        .map(|line| match parse_snmp_number(line) {
-            Ok(value) => Ok(Some(value)),
-            Err(error)
-                if matches!(
-                    error.code.as_str(),
-                    "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        })
+        .zip(poll_plan)
+        .map(
+            |(line, entry)| match parse_snmp_scalar_number(line, &entry.oid) {
+                Ok(value) => Ok(Some(value)),
+                Err(error)
+                    if matches!(
+                        error.code.as_str(),
+                        "SNMP_NO_SUCH_OID" | "SNMP_NON_FINITE" | "SNMP_PARSE_FAILED"
+                    ) =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(error),
+            },
+        )
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -2706,8 +2793,25 @@ fn classify_snmp_command_failure(output: &CommandOutput) -> TaskError {
     }
 }
 
+fn parse_snmp_scalar_number(line: &str, oid: &str) -> Result<f64, TaskError> {
+    if oid.trim_start_matches('.') == sadapp_snmp_profile_engine::FASTPATH_CPU_OID
+        && !line.to_ascii_lowercase().contains("no such")
+    {
+        return sadapp_snmp_profile_engine::parse_fastpath_cpu(line).ok_or_else(|| {
+            TaskError::failed("SNMP_PARSE_FAILED", "FASTPATH CPU utilization was invalid")
+        });
+    }
+    parse_snmp_number(line)
+}
+
 fn parse_snmp_number(line: &str) -> Result<f64, TaskError> {
     let trimmed = line.trim();
+    if trimmed.split(':').count() == 4 && trimmed.as_bytes().first().is_some_and(u8::is_ascii_digit)
+    {
+        return sadapp_snmp_profile_engine::parse_formatted_ticks(trimmed).ok_or_else(|| {
+            TaskError::failed("SNMP_PARSE_FAILED", "SNMP TimeTicks value was invalid")
+        });
+    }
     if trimmed.to_ascii_lowercase().contains("no such") {
         return Err(TaskError::failed(
             "SNMP_NO_SUCH_OID",
@@ -3105,6 +3209,39 @@ mod tests {
         rows: usize,
     }
 
+    struct FallbackMockExecutor {
+        scalars: String,
+    }
+
+    impl CommandExecutor for FallbackMockExecutor {
+        fn run<'a>(
+            &'a self,
+            program: &'a str,
+            args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                let stdout = if program == "snmpget" {
+                    self.scalars.clone()
+                } else {
+                    let oid = args.last().unwrap();
+                    match oid.as_str() {
+                        OID_HR_STORAGE_TYPE => format!(".{oid}.7 = OID: 1.3.6.1.2.1.25.2.1.2\n"),
+                        OID_HR_STORAGE_ALLOC_UNITS => format!(".{oid}.7 = INTEGER: 1024\n"),
+                        OID_HR_STORAGE_SIZE => format!(".{oid}.7 = INTEGER: 2000\n"),
+                        OID_HR_STORAGE_USED => format!(".{oid}.7 = INTEGER: 500\n"),
+                        OID_HR_PROCESSOR_LOAD => format!(".{oid}.1 = INTEGER: 27\n"),
+                        _ => "No Such Object available\n".into(),
+                    }
+                };
+                Ok(CommandOutput {
+                    success: true,
+                    stdout: stdout.into_bytes(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
     struct ProfileTableMockExecutor {
         calls: Mutex<Vec<String>>,
         used: std::sync::atomic::AtomicU32,
@@ -3185,6 +3322,7 @@ mod tests {
                     });
                 };
                 let value = match spec.key {
+                    "cpu.load" => "INTEGER: 12",
                     "if.hc_in" => "Counter64: 1000",
                     "if.hc_out" => "Counter64: 2000",
                     "if.in" | "if.out" => "Counter32: 12",
@@ -3450,6 +3588,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn node_exporter_samples_spool_canonical_values_and_decoded_labels() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let payload = json_object(json!({
+            "resource": { "externalKey": "node:1", "class": "HARDWARE", "kind": "host", "name": "node" },
+            "collector": { "type": "NODE_EXPORTER", "sourceKey": "node:1" },
+        }));
+        let samples = parse_prometheus(
+            b"node_memory_MemTotal_bytes 1000 1710000000000\n\
+              node_memory_MemAvailable_bytes 250 1710000000000\n\
+              node_load1 1.5 1710000000000\n\
+              node_network_receive_bytes_total{device=\"eth0\",alias=\"rack,a\"} 123 1710000000000\n",
+            &[], true,
+        ).unwrap();
+        let outcome = spool_collection(&context, "node-task", &payload, samples).unwrap();
+        assert_eq!(outcome["sampleCount"], 5);
+        let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+        let samples = batch["samples"].as_array().unwrap();
+        for (key, value) in [
+            ("system.memory.total_bytes", 1000.0),
+            ("system.memory.used_bytes", 750.0),
+            ("system.load.1m", 1.5),
+            ("network.receive.bytes_total", 123.0),
+        ] {
+            let sample = samples
+                .iter()
+                .find(|sample| sample["metricKey"] == key)
+                .unwrap();
+            assert_eq!(sample["value"].as_f64(), Some(value));
+            assert_eq!(sample["collector"]["type"], "NODE_EXPORTER");
+            assert_eq!(sample["quality"], "GOOD");
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(sample["observedAt"].as_str().unwrap())
+                    .is_ok()
+            );
+        }
+        let network = samples
+            .iter()
+            .find(|sample| sample["metricKey"] == "network.receive.bytes_total")
+            .unwrap();
+        assert_eq!(network["labels"]["alias"], "rack,a");
+        assert_eq!(network["valueType"], "COUNTER");
+    }
+
+    #[tokio::test]
     async fn rest_validates_body_instead_of_trusting_content_type() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -3711,6 +3903,9 @@ mod tests {
 
     #[test]
     fn parses_common_numeric_net_snmp_output() {
+        assert_eq!(parse_snmp_number("1:14:43:13.00").unwrap(), 13939300.0);
+        assert_eq!(parse_snmp_number("1:14:35:05.50").unwrap(), 13890550.0);
+        assert!(parse_snmp_number("1:24:00:00").is_err());
         assert_eq!(parse_snmp_number("12345").unwrap(), 12345.0);
         assert_eq!(
             parse_snmp_number("Timeticks: (321) 0:00:03.21").unwrap(),
@@ -3720,6 +3915,331 @@ mod tests {
         assert!(parse_snmp_number("No Such Object available").is_err());
         assert!(parse_snmp_number("NaN").is_err());
         assert!(parse_snmp_number("Infinity").is_err());
+    }
+
+    fn unifi_profile_fixture() -> Value {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let private_catalog = root.join("monitoring-worker/mibs");
+        let catalog = if private_catalog.is_dir() {
+            private_catalog
+        } else {
+            root.join("snmp-profiles/profiles")
+        };
+        serde_json::from_slice(&std::fs::read(catalog.join("ubiquiti_unifi.json")).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn fastpath_switch_scalar_plan_decodes_cpu_and_scaled_memory() {
+        let profile = unifi_profile_fixture();
+        let plan = ["switch_cpu", "switch_memory_total", "switch_memory_used"].map(|name| {
+            let scalar = &profile["scalars"][name];
+            SnmpPollEntry {
+                oid: scalar["oid"].as_str().unwrap().into(),
+                metric_key: scalar["metric"].as_str().unwrap().into(),
+                unit: Some(scalar["unit"].as_str().unwrap().into()),
+                scale: scalar["scale"].as_f64().unwrap(),
+                value_type: "GAUGE".into(),
+                required: false,
+                labels: None,
+                transform: serde_json::from_value(scalar["transform"].clone()).unwrap(),
+            }
+        });
+        let values = parse_snmp_output(
+            b"STRING: \"    5 Secs ( 24.1207%)   60 Secs ( 17.8787%)  300 Secs ( 16.1427%)\"\nINTEGER: 256348\nINTEGER: 87864\n",
+            &plan,
+        ).unwrap();
+        assert_eq!(
+            transform_snmp_values(&plan, &values),
+            vec![
+                Some(24.1207),
+                Some(256348.0 * 1024.0),
+                Some(168484.0 * 1024.0)
+            ]
+        );
+        assert_eq!(
+            parse_snmp_output(b"5 Secs (bad%)\n256348\n87864\n", &plan).unwrap()[0],
+            None
+        );
+        assert_eq!(
+            parse_snmp_output(b"No Such Object\n256348\n87864\n", &plan).unwrap()[0],
+            None
+        );
+    }
+
+    #[test]
+    fn unifi_wireless_rows_keep_radio_utilization_separate_from_wlan_clients() {
+        let (plans, issues) = sadapp_snmp_profile_engine::profile_tables::plans_from_profile_json(
+            &unifi_profile_fixture(),
+        );
+        assert!(issues.is_empty());
+        let mut columns = ProfileColumns::new();
+        for (table, name, suffix, raw) in [
+            ("wireless_radios", "interface", "2", "STRING: \"wifi0\""),
+            ("wireless_radios", "radio", "3", "STRING: \"ng\""),
+            ("wireless_radios", "channel_utilization", "6", "INTEGER: 15"),
+            ("wireless_radios", "self_tx_utilization", "8", "INTEGER: 6"),
+            ("wireless_vaps", "ssid", "6", "STRING: \"test-wlan\""),
+            ("wireless_vaps", "interface", "7", "STRING: \"wifi0ap0\""),
+            ("wireless_vaps", "channel", "4", "INTEGER: 11"),
+            ("wireless_vaps", "num_stations", "8", "INTEGER: 1"),
+            ("wireless_vaps", "tx_power_dbm", "21", "INTEGER: 16"),
+            ("wireless_vaps", "rx_bytes", "10", "Counter32: 40311266"),
+            ("wireless_vaps", "tx_bytes", "16", "Counter32: 60809007"),
+        ] {
+            let plan = plans.iter().find(|plan| plan.name == table).unwrap();
+            let column = plan
+                .columns
+                .iter()
+                .find(|column| column.name == name)
+                .unwrap();
+            assert_eq!(column.oid_suffix, suffix);
+            let parsed = parse_profile_column(
+                plan,
+                column,
+                format!(".{}.{suffix}.1 = {raw}\n", plan.base_oid).as_bytes(),
+            );
+            assert!(parsed.issues.is_empty());
+            assert_eq!(parsed.rows.len(), 1);
+            assert!(parsed.rows.contains_key("1"));
+            columns
+                .entry(table.into())
+                .or_default()
+                .insert(name.into(), parsed.rows);
+        }
+        let (snapshot, _) = normalize_profile_tables(&plans, &columns);
+        for (key, value, unit, value_type) in [
+            (
+                "wireless_radios.channel_utilization",
+                15.0,
+                "percent",
+                "GAUGE",
+            ),
+            (
+                "wireless_radios.self_tx_utilization",
+                6.0,
+                "percent",
+                "GAUGE",
+            ),
+            ("wireless_vaps.channel", 11.0, "count", "GAUGE"),
+            ("wireless_vaps.num_stations", 1.0, "count", "GAUGE"),
+            ("wireless_vaps.tx_power_dbm", 16.0, "decibels", "GAUGE"),
+            ("wireless_vaps.rx_bytes", 40311266.0, "bytes", "COUNTER"),
+            ("wireless_vaps.tx_bytes", 60809007.0, "bytes", "COUNTER"),
+        ] {
+            let metric = snapshot
+                .metrics
+                .iter()
+                .find(|metric| metric.metric_key == key)
+                .unwrap();
+            assert_eq!(metric.value, value);
+            assert_eq!(metric.unit, unit);
+            assert_eq!(metric.value_type, value_type);
+        }
+    }
+
+    #[tokio::test]
+    async fn spools_fastpath_cpu_and_canonical_memory_without_ucd_or_host_resources() {
+        let profile = unifi_profile_fixture();
+        let poll_plan = ["switch_cpu", "switch_memory_total", "switch_memory_used"].map(|name| {
+            let scalar = &profile["scalars"][name];
+            json!({
+                "oid": scalar["oid"], "metricKey": scalar["metric"], "unit": scalar["unit"],
+                "scale": scalar["scale"], "valueType": "GAUGE", "required": false,
+                "transform": scalar["transform"],
+            })
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: b"STRING: \"    5 Secs ( 24.1207%)   60 Secs ( 17.8787%)  300 Secs ( 16.1427%)\"\n256348\n87864\n".to_vec(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let mut task = snmp_task("192.168.1.206");
+        task.payload.remove("detectionBundle");
+        task.payload.insert("pollPlan".into(), json!(poll_plan));
+        task.payload.insert(
+            "profile".into(),
+            json!({
+                "name": "ubiquiti-unifi", "version": 1, "checksum": "a".repeat(64),
+            }),
+        );
+        let outcome = collect_snmp(&context, &task).await.unwrap();
+        assert_eq!(outcome["sampleCount"], 4);
+        let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+        let samples = batch["samples"].as_array().unwrap();
+        for (key, expected) in [
+            ("system.cpu.utilization", 24.1207),
+            ("system.memory.total_bytes", 256348.0 * 1024.0),
+            ("system.memory.used_bytes", 168484.0 * 1024.0),
+        ] {
+            let sample = samples
+                .iter()
+                .find(|sample| sample["metricKey"] == key)
+                .unwrap();
+            assert_eq!(sample["value"].as_f64(), Some(expected));
+        }
+        let cpu = outcome["capabilityReport"]["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["name"] == "cpu")
+            .unwrap();
+        let column = cpu["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|column| column["oid"] == sadapp_snmp_profile_engine::FASTPATH_CPU_OID)
+            .unwrap();
+        assert_eq!(column["status"], "supported");
+    }
+
+    #[tokio::test]
+    async fn spools_canonical_ucd_history_metrics_without_host_resources() {
+        for (idle, available, cpu, memory, total_key) in [
+            (
+                99,
+                250,
+                Some(1.0),
+                Some(750.0 * 1024.0),
+                "system.memory.total_bytes",
+            ),
+            (
+                99,
+                250,
+                Some(1.0),
+                Some(750.0 * 1024.0),
+                "system.memory.ucd_total_bytes",
+            ),
+            (
+                101,
+                250,
+                None,
+                Some(750.0 * 1024.0),
+                "system.memory.total_bytes",
+            ),
+            (99, 1250, Some(1.0), None, "system.memory.total_bytes"),
+            (99, -1, Some(1.0), None, "system.memory.total_bytes"),
+            (
+                99,
+                0,
+                Some(1.0),
+                Some(1000.0 * 1024.0),
+                "system.memory.total_bytes",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let executor = Arc::new(MockExecutor {
+                output: CommandOutput {
+                    success: true,
+                    stdout: format!("{idle}\n1000\n{available}\n").into_bytes(),
+                    stderr: Vec::new(),
+                },
+                error: None,
+                calls: Mutex::new(Vec::new()),
+            });
+            let context = test_context(directory.path(), executor);
+            let mut task = snmp_task("192.168.1.203");
+            task.payload.remove("detectionBundle");
+            task.payload.insert("pollPlan".into(), json!([
+                { "oid": "1.3.6.1.4.1.2021.11.11.0", "metricKey": "system.cpu.idle_percent", "unit": "percent", "scale": 1, "valueType": "GAUGE", "required": false },
+                { "oid": "1.3.6.1.4.1.2021.4.5.0", "metricKey": total_key, "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+                { "oid": "1.3.6.1.4.1.2021.4.6.0", "metricKey": "system.memory.available_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+            ]));
+            collect_snmp(&context, &task).await.unwrap();
+            let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+            let samples = batch["samples"].as_array().unwrap();
+            assert_eq!(
+                samples
+                    .iter()
+                    .find(|sample| sample["metricKey"] == "system.memory.total_bytes")
+                    .unwrap()["value"]
+                    .as_f64(),
+                Some(1000.0 * 1024.0)
+            );
+            for (key, expected) in [
+                ("system.cpu.utilization", cpu),
+                ("system.memory.used_bytes", memory),
+            ] {
+                let derived = samples
+                    .iter()
+                    .filter(|sample| sample["metricKey"] == key)
+                    .collect::<Vec<_>>();
+                assert_eq!(derived.len(), usize::from(expected.is_some()));
+                if let Some(expected) = expected {
+                    assert_eq!(derived[0]["value"].as_f64(), Some(expected));
+                    assert_eq!(derived[0]["metadata"]["source"], "SNMP-scalars");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_scalars_do_not_block_coherent_host_resources_fallbacks() {
+        for (
+            index,
+            (idle, total, available, used_key, expected_cpu, expected_used, expected_total),
+        ) in [
+            ("101", "1000", "1250", false, 27.0, 500.0, 2000.0),
+            (
+                "NaN",
+                "No Such Object available",
+                "250",
+                false,
+                27.0,
+                500.0,
+                2000.0,
+            ),
+            ("-1", "1000", "-1", false, 27.0, 500.0, 2000.0),
+            ("99", "1000", "250", false, 1.0, 750.0, 1000.0),
+            ("99", "1000", "0", false, 1.0, 1000.0, 1000.0),
+            ("99", "1000", "1250", true, 1.0, 500.0, 2000.0),
+            ("99", "1000", "250", true, 1.0, 250.0, 1000.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let context = test_context(
+                directory.path(),
+                Arc::new(FallbackMockExecutor {
+                    scalars: format!("{idle}\n{total}\n{available}\n"),
+                }),
+            );
+            let mut task = snmp_task(&format!("192.168.252.{}", index + 1));
+            task.payload.remove("detectionBundle");
+            task.payload.insert("pollPlan".into(), json!([
+                { "oid": "1.3.6.1.4.1.2021.11.11.0", "metricKey": "system.cpu.idle_percent", "unit": "percent", "scale": 1, "valueType": "GAUGE", "required": false },
+                { "oid": "1.3.6.1.4.1.2021.4.5.0", "metricKey": "system.memory.total_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+                { "oid": "1.3.6.1.4.1.2021.4.6.0", "metricKey": if used_key { "system.memory.used_bytes" } else { "system.memory.available_bytes" }, "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+            ]));
+            collect_snmp(&context, &task).await.unwrap();
+            let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+            let samples = batch["samples"].as_array().unwrap();
+            for (key, expected) in [
+                ("system.cpu.utilization", expected_cpu),
+                ("system.memory.used_bytes", expected_used * 1024.0),
+                ("system.memory.total_bytes", expected_total * 1024.0),
+            ] {
+                let values = samples
+                    .iter()
+                    .filter(|sample| sample["metricKey"] == key)
+                    .collect::<Vec<_>>();
+                assert_eq!(values.len(), 1, "{key} in case {index}");
+                assert_eq!(
+                    values[0]["value"].as_f64(),
+                    Some(expected),
+                    "{key} in case {index}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4733,6 +5253,14 @@ mod tests {
             .unwrap();
         assert_eq!(counter["value"], 1000.0);
         assert_eq!(counter["valueType"], "COUNTER");
+        let cores = samples
+            .iter()
+            .filter(|sample| sample["metricKey"] == "system.cpu.core.utilization")
+            .collect::<Vec<_>>();
+        assert_eq!(cores.len(), 128);
+        assert!(cores.iter().all(|sample| sample["value"] == 12.0
+            && sample["valueType"] == "GAUGE"
+            && sample["labels"]["core"].is_string()));
         assert!(samples.iter().any(
             |sample| sample["metricKey"] == "hardware.temperature.celsius"
                 && sample["value"] == 25.0

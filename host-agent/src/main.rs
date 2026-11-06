@@ -2752,6 +2752,77 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn docker_partial_network_counters_preserve_unknown_directions() {
+        let complete = json!({"networks": {
+            "eth0": {"rx_bytes": 100, "tx_bytes": 200},
+            "eth1": {"rx_bytes": 50, "tx_bytes": 70}
+        }});
+        assert_eq!(docker_network_totals(&complete), (Some(150), Some(270)));
+        let partial = json!({"networks": {
+            "eth0": {"rx_bytes": 100, "tx_bytes": 200},
+            "eth1": {"tx_bytes": 70}
+        }});
+        assert_eq!(docker_network_totals(&partial), (None, Some(270)));
+        for invalid in [Value::Null, json!(-1), json!("bad")] {
+            let partial = json!({"networks": {"eth0": {"rx_bytes": 0, "tx_bytes": invalid}}});
+            assert_eq!(docker_network_totals(&partial), (Some(0), None));
+        }
+        assert_eq!(docker_network_totals(&json!({})), (None, None));
+        assert_eq!(
+            docker_network_totals(&json!({"networks": {}})),
+            (Some(0), Some(0))
+        );
+        assert_eq!(
+            docker_network_totals(&json!({"networks": {
+                "a": {"rx_bytes": u64::MAX, "tx_bytes": 0},
+                "b": {"rx_bytes": 1, "tx_bytes": 0}
+            }})),
+            (None, Some(0))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn docker_partial_block_counters_do_not_become_successful_subtotals() {
+        let complete = json!({"blkio_stats": {"io_service_bytes_recursive": [
+            {"op": "Read", "value": 100}, {"op": "read", "value": 50},
+            {"op": "Write", "value": 70}, {"op": "Total", "value": 220}
+        ]}});
+        assert_eq!(docker_block_totals(&complete), (Some(150), Some(70)));
+        for invalid in [Value::Null, json!(-1), json!("bad")] {
+            let partial = json!({"blkio_stats": {"io_service_bytes_recursive": [
+                {"op": "Read", "value": 100}, {"op": "Read", "value": invalid},
+                {"op": "Write", "value": 70}
+            ]}});
+            assert_eq!(docker_block_totals(&partial), (None, Some(70)));
+        }
+        assert_eq!(
+            docker_block_totals(&json!({"blkio_stats": {"io_service_bytes_recursive": [
+                {"op": "Read", "value": 100}, {"op": "Read"}
+            ]}})),
+            (None, Some(0))
+        );
+        assert_eq!(
+            docker_block_totals(&json!({"blkio_stats": {"io_service_bytes_recursive": [
+                {"value": 100}
+            ]}})),
+            (None, None)
+        );
+        assert_eq!(docker_block_totals(&json!({})), (None, None));
+        assert_eq!(
+            docker_block_totals(&json!({"blkio_stats": {"io_service_bytes_recursive": []}})),
+            (Some(0), Some(0))
+        );
+        assert_eq!(
+            docker_block_totals(&json!({"blkio_stats": {"io_service_bytes_recursive": [
+                {"op": "Read", "value": u64::MAX}, {"op": "Read", "value": 1}
+            ]}})),
+            (None, Some(0))
+        );
+    }
+
     #[test]
     fn parses_proxmox_qemu_and_lxc_inventory_fields() {
         let rows = json!([
@@ -3535,6 +3606,40 @@ fn docker_memory_usage(stats: &Value) -> Option<u64> {
 }
 
 #[cfg(unix)]
+fn docker_network_totals(stats: &Value) -> (Option<u64>, Option<u64>) {
+    let Some(networks) = stats.get("networks").and_then(Value::as_object) else {
+        return (None, None);
+    };
+    let sum = |key| {
+        networks.values().try_fold(0_u64, |total, network| {
+            total.checked_add(docker_u64(network.get(key))?)
+        })
+    };
+    (sum("rx_bytes"), sum("tx_bytes"))
+}
+
+#[cfg(unix)]
+fn docker_block_totals(stats: &Value) -> (Option<u64>, Option<u64>) {
+    let Some(entries) = stats
+        .pointer("/blkio_stats/io_service_bytes_recursive")
+        .and_then(Value::as_array)
+    else {
+        return (None, None);
+    };
+    let sum = |operation: &str| {
+        entries.iter().try_fold(0_u64, |total, entry| {
+            let op = entry.get("op").and_then(Value::as_str)?;
+            if op.eq_ignore_ascii_case(operation) {
+                total.checked_add(docker_u64(entry.get("value"))?)
+            } else {
+                Some(total)
+            }
+        })
+    };
+    (sum("read"), sum("write"))
+}
+
+#[cfg(unix)]
 fn docker_cpu_percent(
     current_cpu: u64,
     current_system: u64,
@@ -3815,40 +3920,12 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
             .and_then(|stats| docker_u64(stats.pointer("/memory_stats/limit")));
         let network_totals = stats
             .as_ref()
-            .and_then(|stats| stats.get("networks"))
-            .and_then(Value::as_object)
-            .map(|networks| {
-                networks.values().fold((0_u64, 0_u64), |totals, network| {
-                    (
-                        totals
-                            .0
-                            .saturating_add(docker_u64(network.get("rx_bytes")).unwrap_or(0)),
-                        totals
-                            .1
-                            .saturating_add(docker_u64(network.get("tx_bytes")).unwrap_or(0)),
-                    )
-                })
-            });
+            .map(docker_network_totals)
+            .unwrap_or((None, None));
         let block_totals = stats
             .as_ref()
-            .and_then(|stats| stats.pointer("/blkio_stats/io_service_bytes_recursive"))
-            .and_then(Value::as_array)
-            .map(|entries| {
-                entries.iter().fold((0_u64, 0_u64), |totals, entry| {
-                    let value = docker_u64(entry.get("value")).unwrap_or(0);
-                    match entry
-                        .get("op")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_ascii_lowercase()
-                        .as_str()
-                    {
-                        "read" => (totals.0.saturating_add(value), totals.1),
-                        "write" => (totals.0, totals.1.saturating_add(value)),
-                        _ => totals,
-                    }
-                })
-            });
+            .map(docker_block_totals)
+            .unwrap_or((None, None));
         let image_digest = inspected
             .as_ref()
             .and_then(|value| value.get("RepoDigests"))
@@ -3872,10 +3949,10 @@ fn collect_docker_metrics() -> Option<DockerMetrics> {
             memory_percent: memory_usage.zip(memory_limit).and_then(|(used, limit)| {
                 (limit > 0).then(|| round_to(used as f32 / limit as f32 * 100.0, 2))
             }),
-            net_rx_bytes: network_totals.map(|totals| totals.0),
-            net_tx_bytes: network_totals.map(|totals| totals.1),
-            block_read_bytes: block_totals.map(|totals| totals.0),
-            block_write_bytes: block_totals.map(|totals| totals.1),
+            net_rx_bytes: network_totals.0,
+            net_tx_bytes: network_totals.1,
+            block_read_bytes: block_totals.0,
+            block_write_bytes: block_totals.1,
             started_at: state_data.and_then(|value| docker_string(value.get("StartedAt"))),
             finished_at: state_data.and_then(|value| docker_string(value.get("FinishedAt"))),
             labels,

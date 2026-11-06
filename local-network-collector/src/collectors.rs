@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Result};
 use serde_json::{Map, Value};
@@ -40,11 +40,10 @@ pub fn parse_prometheus(
     let mut samples = Vec::new();
     for line in text
         .lines()
+        .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
     {
-        let (series, raw_value) = line
-            .rsplit_once(char::is_whitespace)
-            .ok_or_else(|| anyhow::anyhow!("invalid Prometheus sample"))?;
+        let (series, fields) = split_prometheus_sample(line)?;
         let (name, labels) = parse_series(series)?;
         let mapping = configured.iter().find(|mapping| mapping.source == name);
         let preset = node_exporter.then(|| node_mapping(name)).flatten();
@@ -54,7 +53,17 @@ pub fn parse_prometheus(
         if !allowed.is_empty() && mapping.is_none() && !node_exporter {
             continue;
         }
-        let value = raw_value.trim().parse::<f64>()?;
+        let mut fields = fields.split_whitespace();
+        let value = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing Prometheus value"))?
+            .parse::<f64>()?;
+        if let Some(timestamp) = fields.next() {
+            timestamp.parse::<i64>()?;
+        }
+        if fields.next().is_some() {
+            bail!("invalid Prometheus sample fields");
+        }
         if !value.is_finite() {
             continue;
         }
@@ -78,7 +87,32 @@ pub fn parse_prometheus(
             bail!("Prometheus sample limit exceeded");
         }
     }
+    if node_exporter {
+        derive_node_used_bytes(&mut samples)?;
+    }
     Ok(samples)
+}
+
+fn split_prometheus_sample(line: &str) -> Result<(&str, &str)> {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut labels = false;
+    for (index, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if quoted && ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            quoted = !quoted;
+        } else if !quoted && ch == '{' {
+            labels = true;
+        } else if !quoted && ch == '}' {
+            labels = false;
+        } else if !quoted && !labels && ch.is_ascii_whitespace() {
+            return Ok((&line[..index], &line[index..]));
+        }
+    }
+    bail!("invalid Prometheus sample")
 }
 
 struct PromMapping {
@@ -120,40 +154,126 @@ fn parse_series(series: &str) -> Result<(&str, Map<String, Value>)> {
         bail!("invalid Prometheus labels");
     }
     let name = &series[..open];
-    let inner = &series[open + 1..series.len() - 1];
+    let mut inner = series[open + 1..series.len() - 1].trim();
     let mut labels = Map::new();
-    if !inner.is_empty() {
-        for item in inner.split(',') {
-            let (key, value) = item
-                .split_once('=')
-                .ok_or_else(|| anyhow::anyhow!("invalid Prometheus label"))?;
-            if labels.len() >= MAX_LABELS || !valid_name(key) {
-                bail!("Prometheus labels exceed bounds");
+    while !inner.is_empty() {
+        let (key, rest) = inner
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("invalid Prometheus label"))?;
+        let key = key.trim();
+        if labels.len() >= MAX_LABELS || !valid_name(key) || labels.contains_key(key) {
+            bail!("invalid or excessive Prometheus labels");
+        }
+        let rest = rest
+            .trim_start()
+            .strip_prefix('"')
+            .ok_or_else(|| anyhow::anyhow!("invalid Prometheus label value"))?;
+        let mut value = String::new();
+        let mut chars = rest.char_indices();
+        let end = loop {
+            match chars.next() {
+                Some((index, '"')) => break index + 1,
+                Some((_, '\\')) => match chars.next() {
+                    Some((_, '\\')) => value.push('\\'),
+                    Some((_, '"')) => value.push('"'),
+                    Some((_, 'n')) => value.push('\n'),
+                    _ => bail!("invalid Prometheus label escape"),
+                },
+                Some((_, ch)) => value.push(ch),
+                None => bail!("unterminated Prometheus label value"),
             }
-            let value = value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .ok_or_else(|| anyhow::anyhow!("invalid Prometheus label value"))?;
             if value.len() > 200 {
                 bail!("Prometheus label value exceeds limit");
             }
-            labels.insert(key.into(), Value::String(value.replace("\\\"", "\"")));
+        };
+        labels.insert(key.into(), Value::String(value));
+        inner = rest[end..].trim_start();
+        if !inner.is_empty() {
+            inner = inner
+                .strip_prefix(',')
+                .ok_or_else(|| anyhow::anyhow!("invalid Prometheus label separator"))?
+                .trim_start();
         }
     }
     Ok((name, labels))
 }
 
+fn derive_node_used_bytes(samples: &mut Vec<MetricSample>) -> Result<()> {
+    let values = samples
+        .iter()
+        .map(|sample| {
+            Ok((
+                (
+                    sample.metric_key.as_str(),
+                    serde_json::to_string(&sample.labels)?,
+                ),
+                sample,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
+    let mut derived = Vec::new();
+    for (total_key, available_key, used_key) in [
+        (
+            "system.memory.total_bytes",
+            "system.memory.available_bytes",
+            "system.memory.used_bytes",
+        ),
+        (
+            "filesystem.total_bytes",
+            "filesystem.available_bytes",
+            "filesystem.used_bytes",
+        ),
+    ] {
+        for sample in samples
+            .iter()
+            .filter(|sample| sample.metric_key == total_key)
+        {
+            let labels = serde_json::to_string(&sample.labels)?;
+            if values.contains_key(&(used_key, labels.clone())) {
+                continue;
+            }
+            let Some(available) = values.get(&(available_key, labels)) else {
+                continue;
+            };
+            if let (Some(total), Some(available)) =
+                (sample.value.as_f64(), available.value.as_f64())
+            {
+                if total > 0.0 && (0.0..=total).contains(&available) {
+                    derived.push(MetricSample {
+                        metric_key: used_key.into(),
+                        unit: Some("bytes".into()),
+                        value_type: "GAUGE".into(),
+                        value: Value::from(total - available),
+                        labels: sample.labels.clone(),
+                    });
+                }
+            }
+        }
+    }
+    if samples.len() + derived.len() > MAX_SAMPLES {
+        bail!("Prometheus sample limit exceeded");
+    }
+    samples.extend(derived);
+    Ok(())
+}
+
 fn node_mapping(name: &str) -> Option<(String, Option<String>, String)> {
     let (key, unit, kind) = match name {
-        "node_memory_MemTotal_bytes" => ("memory.total", Some("bytes"), "GAUGE"),
-        "node_memory_MemAvailable_bytes" => ("memory.available", Some("bytes"), "GAUGE"),
-        "node_load1" => ("load.1m", None, "GAUGE"),
-        "node_load5" => ("load.5m", None, "GAUGE"),
-        "node_load15" => ("load.15m", None, "GAUGE"),
-        "node_filesystem_size_bytes" => ("filesystem.size", Some("bytes"), "GAUGE"),
-        "node_filesystem_avail_bytes" => ("filesystem.available", Some("bytes"), "GAUGE"),
-        "node_network_receive_bytes_total" => ("network.receive.bytes", Some("bytes"), "COUNTER"),
-        "node_network_transmit_bytes_total" => ("network.transmit.bytes", Some("bytes"), "COUNTER"),
+        "node_memory_MemTotal_bytes" => ("system.memory.total_bytes", Some("bytes"), "GAUGE"),
+        "node_memory_MemAvailable_bytes" => {
+            ("system.memory.available_bytes", Some("bytes"), "GAUGE")
+        }
+        "node_load1" => ("system.load.1m", Some("count"), "GAUGE"),
+        "node_load5" => ("system.load.5m", Some("count"), "GAUGE"),
+        "node_load15" => ("system.load.15m", Some("count"), "GAUGE"),
+        "node_filesystem_size_bytes" => ("filesystem.total_bytes", Some("bytes"), "GAUGE"),
+        "node_filesystem_avail_bytes" => ("filesystem.available_bytes", Some("bytes"), "GAUGE"),
+        "node_network_receive_bytes_total" => {
+            ("network.receive.bytes_total", Some("bytes"), "COUNTER")
+        }
+        "node_network_transmit_bytes_total" => {
+            ("network.transmit.bytes_total", Some("bytes"), "COUNTER")
+        }
         _ => return None,
     };
     Some((key.into(), unit.map(str::to_owned), kind.into()))
@@ -281,7 +401,129 @@ mod tests {
         )
         .unwrap();
         assert_eq!(node.len(), 1);
-        assert_eq!(node[0].metric_key, "memory.available");
+        assert_eq!(node[0].metric_key, "system.memory.available_bytes");
+    }
+
+    #[test]
+    fn parses_timestamped_samples_without_using_the_timestamp_as_the_value() {
+        let mappings = [json!({"metricName":"temperature","metricKey":"temperature"})];
+        let samples = parse_prometheus(
+            b"  # comment\n\n temperature 37.5 1710000000000 \n\
+              temperature{room=\"rack a\"}\t-2.5e1\t-123\n\
+              temperature 0\n",
+            &mappings,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.value.clone())
+                .collect::<Vec<_>>(),
+            vec![json!(37.5), json!(-25.0), json!(0.0)]
+        );
+        assert_eq!(samples[1].labels["room"], "rack a");
+        for line in ["temperature", "temperature 1 bad", "temperature 1 1 2"] {
+            assert!(parse_prometheus(line.as_bytes(), &mappings, false).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_quoted_commas_and_prometheus_label_escapes() {
+        let samples = parse_prometheus(
+            br#"temperature{ location = "rack,a", path="C:\\rack", message="say \"hi\"\nnext", empty="", } 42 123
+"#,
+            &[json!({"metricName":"temperature","metricKey":"temperature"})], false,
+        ).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].labels["location"], "rack,a");
+        assert_eq!(samples[0].labels["path"], r"C:\rack");
+        assert_eq!(samples[0].labels["message"], "say \"hi\"\nnext");
+        assert_eq!(samples[0].labels["empty"], "");
+        for labels in [
+            r#"a="unterminated"#,
+            r#"a="bad\t""#,
+            r#"a="1" b="2""#,
+            r#"a="1",a="2""#,
+            r#"a="1",,b="2""#,
+        ] {
+            assert!(
+                parse_prometheus(
+                    format!("temperature{{{labels}}} 42").as_bytes(),
+                    &[json!({"metricName":"temperature","metricKey":"temperature"})],
+                    false,
+                )
+                .is_err(),
+                "{labels}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_preset_emits_canonical_metrics_and_coherent_used_bytes() {
+        let samples = parse_prometheus(
+            b"node_memory_MemTotal_bytes 1000\nnode_memory_MemAvailable_bytes 250\n\
+              node_load1 1\nnode_load5 2\nnode_load15 3\n\
+              node_filesystem_size_bytes{device=\"/dev/a\",mountpoint=\"/\"} 2000\n\
+              node_filesystem_avail_bytes{mountpoint=\"/\",device=\"/dev/a\"} 500\n\
+              node_filesystem_size_bytes{device=\"/dev/b\"} 3000\n\
+              node_network_receive_bytes_total{device=\"eth0\"} 123\n\
+              node_network_transmit_bytes_total{device=\"eth0\"} 456\n",
+            &[],
+            true,
+        )
+        .unwrap();
+        for (key, value, unit, kind) in [
+            ("system.memory.total_bytes", 1000.0, "bytes", "GAUGE"),
+            ("system.memory.available_bytes", 250.0, "bytes", "GAUGE"),
+            ("system.memory.used_bytes", 750.0, "bytes", "GAUGE"),
+            ("system.load.1m", 1.0, "count", "GAUGE"),
+            ("system.load.5m", 2.0, "count", "GAUGE"),
+            ("system.load.15m", 3.0, "count", "GAUGE"),
+            ("filesystem.used_bytes", 1500.0, "bytes", "GAUGE"),
+            ("network.receive.bytes_total", 123.0, "bytes", "COUNTER"),
+            ("network.transmit.bytes_total", 456.0, "bytes", "COUNTER"),
+        ] {
+            let matching = samples
+                .iter()
+                .filter(|sample| sample.metric_key == key)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "{key}");
+            assert_eq!(matching[0].value, json!(value));
+            assert_eq!(matching[0].unit.as_deref(), Some(unit));
+            assert_eq!(matching[0].value_type, kind);
+        }
+        let used = samples
+            .iter()
+            .find(|sample| sample.metric_key == "filesystem.used_bytes")
+            .unwrap();
+        assert_eq!(used.labels["device"], "/dev/a");
+        for available in ["1001", "-1", "NaN"] {
+            let samples = parse_prometheus(
+                format!(
+                    "node_memory_MemTotal_bytes 1000\nnode_memory_MemAvailable_bytes {available}\n"
+                )
+                .as_bytes(),
+                &[],
+                true,
+            )
+            .unwrap();
+            assert!(!samples
+                .iter()
+                .any(|sample| sample.metric_key == "system.memory.used_bytes"));
+        }
+        let overridden = parse_prometheus(
+            b"node_memory_MemTotal_bytes 1000\nnode_memory_MemAvailable_bytes 250\n",
+            &[json!({"metricName":"node_memory_MemTotal_bytes","metricKey":"custom.total"})],
+            true,
+        )
+        .unwrap();
+        assert!(overridden
+            .iter()
+            .any(|sample| sample.metric_key == "custom.total"));
+        assert!(!overridden
+            .iter()
+            .any(|sample| sample.metric_key == "system.memory.used_bytes"));
     }
 
     #[test]
@@ -303,6 +545,30 @@ mod tests {
             false
         )
         .is_err());
+        for (length, accepted) in [(200, true), (201, false)] {
+            let body = format!("metric{{label=\"{}\"}} 1", "\\n".repeat(length));
+            let result = parse_prometheus(
+                body.as_bytes(),
+                &[json!({"metricName":"metric","metricKey":"metric"})],
+                false,
+            );
+            assert_eq!(result.is_ok(), accepted);
+        }
+        for (padding, accepted) in [(MAX_SAMPLES - 3, true), (MAX_SAMPLES - 2, false)] {
+            let body = format!(
+                "{}node_memory_MemTotal_bytes 1000\nnode_memory_MemAvailable_bytes 250\n",
+                "metric 1\n".repeat(padding),
+            );
+            let result = parse_prometheus(
+                body.as_bytes(),
+                &[json!({"metricName":"metric","metricKey":"metric"})],
+                true,
+            );
+            assert_eq!(result.is_ok(), accepted);
+            if let Ok(samples) = result {
+                assert_eq!(samples.len(), MAX_SAMPLES);
+            }
+        }
     }
 
     #[test]

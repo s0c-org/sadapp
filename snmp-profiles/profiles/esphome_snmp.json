@@ -53,9 +53,9 @@
     },
     "sys_uptime": {
       "oid": "1.3.6.1.2.1.1.3.0",
-      "type": "gauge",
+      "type": "timeticks",
       "unit": "seconds",
-      "scale": 1,
+      "scale": 0.01,
       "transform": null,
       "metric": "sys_uptime",
       "required": false,
@@ -108,9 +108,9 @@
     },
     "hr_system_uptime": {
       "oid": "1.3.6.1.2.1.25.1.1.0",
-      "type": "gauge",
+      "type": "timeticks",
       "unit": "seconds",
-      "scale": 1,
+      "scale": 0.01,
       "transform": null,
       "metric": "hr_system_uptime",
       "required": false,

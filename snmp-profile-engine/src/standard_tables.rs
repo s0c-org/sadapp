@@ -43,6 +43,11 @@ pub struct TableSpec {
 
 pub const STANDARD_TABLES: &[TableSpec] = &[
     TableSpec {
+        key: "cpu.load",
+        oid: "1.3.6.1.2.1.25.3.3.1.2",
+        metadata: false,
+    },
+    TableSpec {
         key: "if.in_discards",
         oid: "1.3.6.1.2.1.2.2.1.13",
         metadata: false,
@@ -475,6 +480,25 @@ pub fn normalize_standard_tables_with_issues(
     let bounded = bound_standard_columns(columns);
     let columns = &bounded;
     let mut snapshot = StandardSnapshot::default();
+    for index in indices(columns, "cpu.") {
+        match number(columns, "cpu.load", index) {
+            Some(value) if value.is_finite() && (0.0..=100.0).contains(&value) => {
+                snapshot.metrics.push(StandardMetric {
+                    name: "cpu.core.utilization".into(),
+                    metric_key: "system.cpu.core.utilization".into(),
+                    unit: "percent".into(),
+                    value_type: "GAUGE".into(),
+                    value,
+                    labels: BTreeMap::from([("core".into(), index.to_string())]),
+                });
+            }
+            _ => issues.push(TableIssue::new(
+                "standard",
+                Some("cpu.load"),
+                "SNMP_INVALID_VALUE",
+            )),
+        }
+    }
     for index in indices(columns, "if.") {
         let name = text(columns, "if.name", index)
             .or_else(|| text(columns, "if.descr", index))
@@ -711,6 +735,37 @@ pub fn normalize_standard_tables_with_issues(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn processor_rows_emit_labeled_live_cores_without_invalid_values() {
+        use super::*;
+        let columns = BTreeMap::from([(
+            "cpu.load".into(),
+            BTreeMap::from([
+                (196608, "INTEGER: 2".into()),
+                (196609, "INTEGER: 1".into()),
+                (196610, "INTEGER: 0".into()),
+                (196611, "INTEGER: 101".into()),
+            ]),
+        )]);
+        let (snapshot, issues) = normalize_standard_tables_with_issues(&columns);
+        assert_eq!(snapshot.metrics.len(), 3);
+        assert_eq!(issues.len(), 1);
+        for (metric, (index, value)) in
+            snapshot
+                .metrics
+                .iter()
+                .zip([(196608, 2.0), (196609, 1.0), (196610, 0.0)])
+        {
+            assert_eq!(metric.metric_key, "system.cpu.core.utilization");
+            assert_eq!(metric.labels["core"], index.to_string());
+            assert_eq!(metric.value, value);
+            assert_eq!(metric.unit, "percent");
+        }
+        assert!(STANDARD_TABLES.iter().any(|spec| spec.key == "cpu.load"
+            && !spec.metadata
+            && spec.oid == "1.3.6.1.2.1.25.3.3.1.2"));
+    }
+
     use super::*;
 
     #[test]

@@ -322,6 +322,7 @@ pub fn group_status(columns: &[CapabilityColumn]) -> CapabilityStatus {
 pub fn standard_column_group(standard_key: &str) -> &'static str {
     match standard_key.split('.').next().unwrap_or_default() {
         "if" => "interfaces",
+        "cpu" => "cpu",
         "storage" => "storage",
         "sensor" => "sensors",
         "entity" => "inventory",
@@ -426,7 +427,10 @@ pub fn validate_report(value: &serde_json::Value) -> Result<CapabilityReport, &'
     Ok(report)
 }
 
-pub fn reboot_detected(previous_uptime_seconds: Option<f64>, current_uptime_seconds: Option<f64>) -> bool {
+pub fn reboot_detected(
+    previous_uptime_seconds: Option<f64>,
+    current_uptime_seconds: Option<f64>,
+) -> bool {
     matches!(
         (previous_uptime_seconds, current_uptime_seconds),
         (Some(previous), Some(current)) if previous.is_finite() && current.is_finite() && current < previous
@@ -481,7 +485,12 @@ mod tests {
     fn distinguishes_supported_unsupported_and_unknown() {
         let mut recorder = CapabilityRecorder::new();
         recorder.record_column("interfaces", OID, ["2", "1"], rows(None));
-        recorder.record_column("interfaces", "1.3.6.1.2.1.2.2.1.5", Vec::<String>::new(), ColumnResult::Empty);
+        recorder.record_column(
+            "interfaces",
+            "1.3.6.1.2.1.2.2.1.5",
+            Vec::<String>::new(),
+            ColumnResult::Empty,
+        );
         recorder.record_column(
             "storage",
             "1.3.6.1.2.1.25.2.3.1.5",
@@ -518,14 +527,37 @@ mod tests {
             TableWalkFailure::RowLimit,
         ] {
             let mut recorder = CapabilityRecorder::new();
-            recorder.record_column("cpu", OID, Vec::<String>::new(), ColumnResult::from_failure(failure));
+            recorder.record_column(
+                "cpu",
+                OID,
+                Vec::<String>::new(),
+                ColumnResult::from_failure(failure),
+            );
             let report = recorder.finish("c", "2026-11-04T18:00:00Z");
-            assert_eq!(report.groups[0].columns[0].status, CapabilityStatus::Unknown);
+            assert_eq!(
+                report.groups[0].columns[0].status,
+                CapabilityStatus::Unknown
+            );
         }
         let mut recorder = CapabilityRecorder::new();
-        recorder.record_column("cpu", OID, Vec::<String>::new(), rows(Some("SNMP_INVALID_TABLE_INDEX")));
-        recorder.record_column("cpu", "1.3.6.1.4.1.9.1", Vec::<String>::new(), ColumnResult::NotAttempted);
-        recorder.record_column("cpu", "1.3.6.1.4.1.9.2", Vec::<String>::new(), ColumnResult::Failed("raw secret".into()));
+        recorder.record_column(
+            "cpu",
+            OID,
+            Vec::<String>::new(),
+            rows(Some("SNMP_INVALID_TABLE_INDEX")),
+        );
+        recorder.record_column(
+            "cpu",
+            "1.3.6.1.4.1.9.1",
+            Vec::<String>::new(),
+            ColumnResult::NotAttempted,
+        );
+        recorder.record_column(
+            "cpu",
+            "1.3.6.1.4.1.9.2",
+            Vec::<String>::new(),
+            ColumnResult::Failed("raw secret".into()),
+        );
         let report = recorder.finish("c", "2026-11-04T18:00:00Z");
         let codes = report.groups[0]
             .columns
@@ -535,7 +567,10 @@ mod tests {
         assert_eq!(
             codes,
             vec![
-                (CapabilityStatus::Unknown, "SNMP_INVALID_TABLE_INDEX".to_string()),
+                (
+                    CapabilityStatus::Unknown,
+                    "SNMP_INVALID_TABLE_INDEX".to_string()
+                ),
                 (CapabilityStatus::Unknown, "SNMP_NOT_ATTEMPTED".to_string()),
                 (CapabilityStatus::Unknown, "SNMP_GET_FAILED".to_string()),
             ]
@@ -545,7 +580,12 @@ mod tests {
     #[test]
     fn partial_rows_stay_supported_with_limit_code_and_merge_prefers_evidence() {
         let mut recorder = CapabilityRecorder::new();
-        recorder.record_column("interfaces", OID, Vec::<String>::new(), ColumnResult::from_failure(TableWalkFailure::Timeout));
+        recorder.record_column(
+            "interfaces",
+            OID,
+            Vec::<String>::new(),
+            ColumnResult::from_failure(TableWalkFailure::Timeout),
+        );
         recorder.record_column("interfaces", OID, ["7"], rows(Some("SNMP_RESPONSE_LIMIT")));
         recorder.record_column("interfaces", OID, Vec::<String>::new(), ColumnResult::Empty);
         let report = recorder.finish("c", "2026-11-04T18:00:00Z");
@@ -567,14 +607,29 @@ mod tests {
             );
         }
         recorder.record_column("interfaces", "not-an-oid", ["1"], rows(None));
-        recorder.record_column("interfaces", "1.3.6.1.9", ["bad index with spaces", "x".repeat(65).as_str()], rows(None));
+        recorder.record_column(
+            "interfaces",
+            "1.3.6.1.9",
+            ["bad index with spaces", "x".repeat(65).as_str()],
+            rows(None),
+        );
         let report = recorder.finish("c", "2026-11-04T18:00:00Z");
-        let columns = report.groups.iter().map(|group| group.columns.len()).sum::<usize>();
+        let columns = report
+            .groups
+            .iter()
+            .map(|group| group.columns.len())
+            .sum::<usize>();
         assert_eq!(columns, MAX_REPORT_COLUMNS);
         let bytes = serde_json::to_vec(&report).unwrap();
         assert!(bytes.len() <= MAX_REPORT_BYTES, "{}", bytes.len());
-        assert!(report.groups[0].columns.iter().all(|column| column.indexes.len() <= MAX_COLUMN_INDEXES));
-        assert!(report.groups[0].columns.iter().any(|column| column.code.as_deref() == Some("SNMP_REPORT_LIMIT")));
+        assert!(report.groups[0]
+            .columns
+            .iter()
+            .all(|column| column.indexes.len() <= MAX_COLUMN_INDEXES));
+        assert!(report.groups[0]
+            .columns
+            .iter()
+            .any(|column| column.code.as_deref() == Some("SNMP_REPORT_LIMIT")));
         validate_report(&serde_json::to_value(&report).unwrap()).unwrap();
     }
 
@@ -606,23 +661,44 @@ mod tests {
         assert!(validate_report(&extra).is_err());
         let mut supported = base.clone();
         supported["groups"][0]["status"] = "supported".into();
-        supported["groups"][0]["columns"][0] = serde_json::json!({"oid": OID, "status": "supported", "indexes": []});
+        supported["groups"][0]["columns"][0] =
+            serde_json::json!({"oid": OID, "status": "supported", "indexes": []});
         assert!(validate_report(&supported).is_err());
     }
 
     #[test]
     fn unsupported_is_only_skipped_while_fresh_and_unknown_is_always_polled() {
         let mut recorder = CapabilityRecorder::new();
-        recorder.record_column("interfaces", "1.3.6.1.1", Vec::<String>::new(), ColumnResult::Empty);
-        recorder.record_column("interfaces", "1.3.6.1.2", Vec::<String>::new(), ColumnResult::from_failure(TableWalkFailure::Timeout));
+        recorder.record_column(
+            "interfaces",
+            "1.3.6.1.1",
+            Vec::<String>::new(),
+            ColumnResult::Empty,
+        );
+        recorder.record_column(
+            "interfaces",
+            "1.3.6.1.2",
+            Vec::<String>::new(),
+            ColumnResult::from_failure(TableWalkFailure::Timeout),
+        );
         recorder.record_column("interfaces", "1.3.6.1.3", ["1"], rows(None));
         let report = recorder.finish("sum", "2026-11-04T18:00:00Z");
         let candidates = ["1.3.6.1.1", "1.3.6.1.2", "1.3.6.1.3", "1.3.6.1.4"].map(String::from);
         let fresh = report_is_fresh(&report, "sum", Duration::from_secs(60), false);
         assert!(fresh);
         assert_eq!(columns_to_poll(Some(&report), fresh, &candidates).len(), 3);
-        assert!(!report_is_fresh(&report, "other", Duration::from_secs(60), false));
-        assert!(!report_is_fresh(&report, "sum", CAPABILITY_REPORT_TTL, false));
+        assert!(!report_is_fresh(
+            &report,
+            "other",
+            Duration::from_secs(60),
+            false
+        ));
+        assert!(!report_is_fresh(
+            &report,
+            "sum",
+            CAPABILITY_REPORT_TTL,
+            false
+        ));
         assert!(!report_is_fresh(&report, "sum", Duration::ZERO, true));
         assert_eq!(columns_to_poll(Some(&report), false, &candidates).len(), 4);
         assert_eq!(columns_to_poll(None, true, &candidates).len(), 4);

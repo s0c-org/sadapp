@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile_name": "ubiquiti-unifi",
   "display_name": "Ubiquiti UniFi",
-  "description": "UniFi infrastructure including Cloud Key, US-16-150W and U7 Lite identities; optional UCD-SNMP host metrics and UBNT-MIB wireless definitions. Detection support does not certify every metric on every model.",
+  "description": "UniFi identities with optional UCD-SNMP host metrics, FASTPATH switch CPU/memory, and UBNT-UniFi radio/WLAN tables. Detection support does not certify every metric on every model or enable SNMP on Cloud Key consoles.",
   "vendor": "Ubiquiti",
   "device_classes": [
     "wireless",
@@ -38,6 +38,40 @@
     }
   },
   "scalars": {
+    "switch_cpu": {
+      "oid": "1.3.6.1.4.1.4413.1.1.1.1.4.9.0",
+      "type": "gauge",
+      "unit": "percent",
+      "scale": 1,
+      "metric": "system.cpu.utilization",
+      "required": false,
+      "optional": true,
+      "priority": 79
+    },
+    "switch_memory_total": {
+      "oid": "1.3.6.1.4.1.4413.1.1.1.1.4.2.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "metric": "system.memory.fastpath_total_bytes",
+      "required": false,
+      "optional": true,
+      "priority": 79
+    },
+    "switch_memory_used": {
+      "oid": "1.3.6.1.4.1.4413.1.1.1.1.4.1.0",
+      "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": {
+        "operation": "used_from_free",
+        "total_metric": "system.memory.fastpath_total_bytes"
+      },
+      "metric": "system.memory.used_bytes",
+      "required": false,
+      "optional": true,
+      "priority": 78
+    },
     "uptime": {
       "oid": "1.3.6.1.2.1.1.3.0",
       "type": "timeticks",
@@ -206,7 +240,7 @@
   },
   "tables": {
     "wireless_radios": {
-      "base_oid": "1.3.6.1.4.1.41112.1.6.1.1",
+      "base_oid": "1.3.6.1.4.1.41112.1.6.1.1.1",
       "index_strategy": "integer",
       "columns": {
         "index": {
@@ -225,37 +259,99 @@
           "transform": null,
           "metric": "wireless_radios.interface"
         },
-        "radio_frequency": {
+        "radio": {
           "oid_suffix": "3",
-          "type": "integer",
-          "unit": "hertz",
+          "type": "string",
+          "unit": "text",
           "scale": 1,
           "transform": null,
-          "metric": "wireless_radios.radio_frequency"
+          "metric": "wireless_radios.radio"
         },
-        "channel": {
+        "rx_packets": {
           "oid_suffix": "4",
-          "type": "integer",
+          "type": "counter",
           "unit": "count",
           "scale": 1,
           "transform": null,
-          "metric": "wireless_radios.channel"
+          "metric": "wireless_radios.rx_packets"
         },
-        "tx_power_dbm": {
+        "tx_packets": {
           "oid_suffix": "5",
-          "type": "integer",
-          "unit": "watts",
+          "type": "counter",
+          "unit": "count",
           "scale": 1,
           "transform": null,
-          "metric": "wireless_radios.tx_power_dbm"
+          "metric": "wireless_radios.tx_packets"
         },
-        "num_stations": {
+        "channel_utilization": {
+          "oid_suffix": "6",
+          "type": "integer",
+          "unit": "percent",
+          "scale": 1,
+          "metric": "wireless_radios.channel_utilization"
+        },
+        "self_rx_utilization": {
+          "oid_suffix": "7",
+          "type": "integer",
+          "unit": "percent",
+          "scale": 1,
+          "metric": "wireless_radios.self_rx_utilization"
+        },
+        "self_tx_utilization": {
           "oid_suffix": "8",
           "type": "integer",
-          "unit": "count",
+          "unit": "percent",
           "scale": 1,
           "transform": null,
-          "metric": "wireless_radios.num_stations"
+          "metric": "wireless_radios.self_tx_utilization"
+        },
+        "other_bss_utilization": {
+          "oid_suffix": "9",
+          "type": "integer",
+          "unit": "percent",
+          "scale": 1,
+          "metric": "wireless_radios.other_bss_utilization"
+        }
+      },
+      "max_rows": 256,
+      "cost": 10
+    },
+    "wireless_vaps": {
+      "base_oid": "1.3.6.1.4.1.41112.1.6.1.2.1",
+      "index_strategy": "integer",
+      "columns": {
+        "index": {
+          "oid_suffix": "1", "type": "integer", "unit": "count",
+          "scale": 1, "metric": "wireless_vaps.index"
+        },
+        "interface": {
+          "oid_suffix": "7", "type": "string", "unit": "text", "scale": 1
+        },
+        "ssid": {
+          "oid_suffix": "6", "type": "string", "unit": "text", "scale": 1
+        },
+        "radio": {
+          "oid_suffix": "9", "type": "string", "unit": "text", "scale": 1
+        },
+        "channel": {
+          "oid_suffix": "4", "type": "integer", "unit": "count",
+          "scale": 1, "metric": "wireless_vaps.channel"
+        },
+        "tx_power_dbm": {
+          "oid_suffix": "21", "type": "integer", "unit": "decibels",
+          "scale": 1, "metric": "wireless_vaps.tx_power_dbm"
+        },
+        "num_stations": {
+          "oid_suffix": "8", "type": "integer", "unit": "count",
+          "scale": 1, "metric": "wireless_vaps.num_stations"
+        },
+        "rx_bytes": {
+          "oid_suffix": "10", "type": "counter", "unit": "bytes",
+          "scale": 1, "metric": "wireless_vaps.rx_bytes"
+        },
+        "tx_bytes": {
+          "oid_suffix": "16", "type": "counter", "unit": "bytes",
+          "scale": 1, "metric": "wireless_vaps.tx_bytes"
         }
       },
       "max_rows": 256,
