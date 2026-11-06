@@ -48,6 +48,21 @@ site tasks are not guaranteed to run on that particular collector until leased.
 Discovery observations are versioned and retain every open configured TCP port
 for a host, along with transport and observation time. Probes are bounded to four
 ports per host concurrently, and a task is limited to 4096 hosts and 32 ports.
+On Linux, discovery also reads the local `ip -j neigh show` cache without
+privileges or active probes. Entries are included only when their address was in
+the scanned host range and falls within the matching interface's concrete
+on-link network; this avoids assigning a gateway's link-layer address to a
+remote routed target. Candidate evidence may contain
+`linkLayerObservations: [{macAddress, interfaceName, networkCidr,
+addressFamily, source}]`, where `addressFamily` is `ipv4` or `ipv6` and `source`
+is `arp` or `ndp`. Invalid, zero, multicast, incomplete, and failed neighbor
+entries are omitted. These are local cache observations, not authenticated or
+verified device identities. Unsupported platforms, unavailable caches, missing
+interface context, and oversized caches are reported as result diagnostics
+(`LINK_LAYER_UNSUPPORTED_PLATFORM`, `LINK_LAYER_CACHE_UNAVAILABLE`,
+`LINK_LAYER_INTERFACE_CONTEXT_UNAVAILABLE`, or
+`LINK_LAYER_CACHE_LIMIT_EXCEEDED`) and do not fail discovery. The cache command
+has a two-second deadline and a 1 MiB output cap.
 Detected HTTP/HTTPS ports also receive an unauthenticated `HEAD` probe, with
 `OPTIONS` fallback when `HEAD` is unsupported. Redirects are disabled; no
 credentials are sent. Response status, server header, and auth challenge are

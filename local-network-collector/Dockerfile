@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM debian:trixie-slim AS runtime
 RUN apt-get update \
 	&& apt-get upgrade --yes \
-	&& apt-get install --no-install-recommends --yes ca-certificates curl iputils-ping snmp \
+	&& apt-get install --no-install-recommends --yes ca-certificates curl iproute2 iputils-ping snmp \
 	&& rm -rf /var/lib/apt/lists/*
 RUN useradd --system --home-dir /var/lib/sadapp-local-network-collector --create-home sadapp-local-network-collector
 COPY --from=builder /build/local-network-collector/target/release/sadapp-local-network-collector /usr/local/bin/sadapp-local-network-collector

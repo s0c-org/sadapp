@@ -15,10 +15,12 @@ overrides:
     depends:
       - snmp
       - iputils-ping
+      - iproute2
   rpm:
     depends:
       - net-snmp-utils
       - iputils
+      - iproute
 scripts:
   postinstall: packaging/postinstall.sh
   preremove: packaging/preremove.sh

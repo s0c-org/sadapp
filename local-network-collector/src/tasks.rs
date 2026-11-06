@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     future::Future,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
@@ -42,6 +43,7 @@ use sadapp_snmp_profile_engine::{
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::{
+    io::AsyncReadExt,
     net::{lookup_host, TcpStream},
     process::Command,
     time::timeout,
@@ -51,6 +53,7 @@ use crate::{
     api::ApiClient,
     collectors::{map_rest_json, parse_prometheus, MetricSample, MAX_RESPONSE_BYTES},
     discovery_protocols::discover_multicast,
+    link_layer::{self, LinkLayerDiscovery},
     model::{Credentials, TaskLease, TaskResult, TaskResultStatus, TaskType},
     network_policy::{NetworkPolicy, MAX_DISCOVERY_HOSTS},
     runtime_config::{self, CollectorConfig, SharedCollectorConfig},
@@ -93,6 +96,18 @@ pub trait CommandExecutor: Send + Sync {
         program: &'a str,
         args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>>;
+
+    fn run_bounded<'a>(
+        &'a self,
+        program: &'a str,
+        args: &'a [String],
+        max_stdout_bytes: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<CommandOutput>>> + Send + 'a>> {
+        Box::pin(async move {
+            let output = self.run(program, args).await?;
+            Ok((output.stdout.len() <= max_stdout_bytes).then_some(output))
+        })
+    }
 
     fn run_with_stderr<'a>(
         &'a self,
@@ -164,6 +179,43 @@ pub trait CommandExecutor: Send + Sync {
 pub struct TokioCommandExecutor;
 
 impl CommandExecutor for TokioCommandExecutor {
+    fn run_bounded<'a>(
+        &'a self,
+        program: &'a str,
+        args: &'a [String],
+        max_stdout_bytes: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<CommandOutput>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut child = Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("bounded command stdout unavailable"))?;
+            let mut captured = Vec::with_capacity(max_stdout_bytes.min(64 * 1024));
+            stdout
+                .take(max_stdout_bytes.saturating_add(1) as u64)
+                .read_to_end(&mut captured)
+                .await?;
+            if captured.len() > max_stdout_bytes {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Ok(None);
+            }
+            let status = child.wait().await?;
+            Ok(Some(CommandOutput {
+                success: status.success(),
+                stdout: captured,
+                stderr: Vec::new(),
+            }))
+        })
+    }
+
     fn run_table_partial<'a>(
         &'a self,
         program: &'a str,
@@ -656,6 +708,7 @@ fn merge_discovery_candidate(candidates: &mut Vec<Value>, observation: Value) {
         "httpResponses",
         "snmpResponses",
         "protocolObservations",
+        "linkLayerObservations",
         "probes",
     ] {
         let Some(incoming) = incoming_evidence.get(key).and_then(Value::as_array) else {
@@ -817,6 +870,39 @@ async fn probe_snmpv3_service(context: &TaskContext, target: IpAddr) -> Option<V
     snmpv3_discovery_evidence(&output)
 }
 
+async fn discover_link_layer(
+    context: &TaskContext,
+    cidr: IpNet,
+    scanned_targets: &[IpAddr],
+) -> LinkLayerDiscovery {
+    #[cfg(target_os = "linux")]
+    {
+        let args = ["-j", "neigh", "show"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let output = timeout(
+            Duration::from_secs(2),
+            context
+                .command_executor
+                .run_bounded("ip", &args, link_layer::MAX_NEIGHBOR_CACHE_BYTES),
+        )
+        .await;
+        match output {
+            Ok(Ok(Some(output))) if output.success => {
+                link_layer::from_neighbor_cache(cidr, scanned_targets, Ok(output.stdout.as_slice()))
+            }
+            Ok(Ok(None)) => link_layer::cache_limit_exceeded(),
+            _ => link_layer::from_neighbor_cache(cidr, scanned_targets, Err(())),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (context, cidr, scanned_targets);
+        link_layer::unsupported_platform()
+    }
+}
+
 async fn discover(context: &TaskContext, payload: &Map<String, Value>) -> TaskOutcome {
     let cidr = text(payload, "cidr")?
         .parse::<IpNet>()
@@ -838,13 +924,14 @@ async fn discover(context: &TaskContext, payload: &Map<String, Value>) -> TaskOu
         .validate_discovery_cidr(cidr)
         .map_err(|error| TaskError::policy(error.to_string()))?;
     let addresses = addresses(cidr)?;
+    let scanned_targets = addresses.iter().copied().collect::<HashSet<_>>();
     let http_client = reqwest::Client::builder()
         .redirect(Policy::none())
         .timeout(probe_timeout.min(Duration::from_secs(2)))
         .build()
         .map_err(TaskError::internal)?;
     tracing::info!(cidr = %cidr, hosts = addresses.len(), port_count = ports.len(), concurrency, timeout_ms = probe_timeout.as_millis(), "local network discovery started");
-    let mut candidates = stream::iter(addresses)
+    let mut candidates = stream::iter(addresses.iter().copied())
         .map(|address| {
             let ports = ports.clone();
             let http_client = http_client.clone();
@@ -919,6 +1006,27 @@ async fn discover(context: &TaskContext, payload: &Map<String, Value>) -> TaskOu
     for candidate in multicast_candidates {
         merge_discovery_candidate(&mut candidates, candidate);
     }
+    let link_layer = discover_link_layer(context, cidr, &addresses).await;
+    let link_layer_observation_count = link_layer.observations.len();
+    let observed_at = chrono::Utc::now().to_rfc3339();
+    for observation in link_layer.observations {
+        if !scanned_targets.contains(&observation.address) {
+            continue;
+        }
+        merge_discovery_candidate(
+            &mut candidates,
+            json!({
+                "address": observation.address.to_string(),
+                "kind": "network_host",
+                "evidence": {
+                    "schemaVersion": 1,
+                    "observedAt": observed_at,
+                    "probes": ["neighbor-cache"],
+                    "linkLayerObservations": [observation.evidence],
+                },
+            }),
+        );
+    }
     for batch in candidates.chunks(250) {
         context
             .api
@@ -927,9 +1035,13 @@ async fn discover(context: &TaskContext, payload: &Map<String, Value>) -> TaskOu
             .map_err(TaskError::internal)?;
     }
     tracing::info!(cidr = %cidr, scanned_hosts = addresses_len(cidr), candidates_submitted = candidates.len(), multicast_candidates = multicast_count, "local network discovery completed");
-    Ok(json_object(
-        json!({"scannedHosts": addresses_len(cidr), "candidatesSubmitted": candidates.len(), "multicastCandidates": multicast_count}),
-    ))
+    Ok(json_object(json!({
+        "scannedHosts": addresses_len(cidr),
+        "candidatesSubmitted": candidates.len(),
+        "multicastCandidates": multicast_count,
+        "linkLayerObservationCount": link_layer_observation_count,
+        "diagnostics": link_layer.diagnostics,
+    })))
 }
 
 async fn run_check(context: &TaskContext, payload: &Map<String, Value>) -> TaskOutcome {
@@ -3767,6 +3879,13 @@ mod tests {
                     "identity": { "method": "onvif", "verified": true, "keyHash": "a".repeat(64), "deviceProfile": "camera" },
                     "services": [{ "transport": "udp", "port": 3702, "service": "onvif" }],
                     "protocolObservations": [{ "protocol": "onvif-wsd", "port": 3702, "state": "responded", "interfaceAddress": "10.0.0.8" }],
+                    "linkLayerObservations": [{
+                        "macAddress": "02:00:00:00:00:20",
+                        "interfaceName": "eth0",
+                        "networkCidr": "10.0.0.0/24",
+                        "addressFamily": "ipv4",
+                        "source": "arp"
+                    }],
                 },
             }),
         );
@@ -3793,6 +3912,10 @@ mod tests {
         assert_eq!(
             candidates[0]["evidence"]["protocolObservations"][0]["interfaceAddress"],
             "10.0.0.8"
+        );
+        assert_eq!(
+            candidates[0]["evidence"]["linkLayerObservations"][0]["networkCidr"],
+            "10.0.0.0/24"
         );
     }
 
