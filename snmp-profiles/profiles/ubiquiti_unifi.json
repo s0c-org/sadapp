@@ -105,15 +105,26 @@
       "priority": 85,
       "timeout_ms": null
     },
-    "memory_available": {
+    "memory_free": {
       "oid": "1.3.6.1.4.1.2021.4.6.0",
       "type": "integer",
       "unit": "bytes",
       "scale": 1024,
       "transform": null,
-      "metric": "system.memory.available_bytes",
+      "metric": "system.memory.free_bytes",
       "required": false,
       "priority": 80,
+      "timeout_ms": null
+    },
+    "memory_available": {
+      "oid": "1.3.6.1.4.1.2021.4.27.0",
+      "type": "gauge",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.available_bytes",
+      "required": false,
+      "priority": 81,
       "timeout_ms": null
     },
     "load_one": {

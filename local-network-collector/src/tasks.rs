@@ -1561,11 +1561,14 @@ async fn collect_snmp(context: &TaskContext, task: &TaskLease) -> TaskOutcome {
         }
     }
     if !has_metric(&samples, &["system.memory.used_bytes"]) {
-        if let (Some(total), Some(available)) = (
-            scalar_value(&["system.memory.total_bytes", "system.memory.ucd_total_bytes"]),
-            scalar_value(&["system.memory.available_bytes"]),
-        ) {
-            if total > 0.0 && (0.0..=total).contains(&available) {
+        if let Some(total) =
+            scalar_value(&["system.memory.total_bytes", "system.memory.ucd_total_bytes"])
+                .filter(|value| *value > 0.0)
+        {
+            if let Some(available) = ["system.memory.available_bytes", "system.memory.free_bytes"]
+                .iter()
+                .find_map(|key| scalar_value(&[key]).filter(|value| (0.0..=total).contains(value)))
+            {
                 derived.push((
                     "system.memory.used_bytes",
                     "bytes",
@@ -4226,82 +4229,115 @@ mod tests {
 
     #[tokio::test]
     async fn spools_canonical_ucd_history_metrics_without_host_resources() {
-        for (idle, available, cpu, memory, total_key) in [
-            (
-                99,
-                250,
-                Some(1.0),
-                Some(750.0 * 1024.0),
-                "system.memory.total_bytes",
-            ),
-            (
-                99,
-                250,
-                Some(1.0),
-                Some(750.0 * 1024.0),
-                "system.memory.ucd_total_bytes",
-            ),
-            (
-                101,
-                250,
-                None,
-                Some(750.0 * 1024.0),
-                "system.memory.total_bytes",
-            ),
-            (99, 1250, Some(1.0), None, "system.memory.total_bytes"),
-            (99, -1, Some(1.0), None, "system.memory.total_bytes"),
-            (
-                99,
-                0,
-                Some(1.0),
-                Some(1000.0 * 1024.0),
-                "system.memory.total_bytes",
-            ),
-        ] {
-            let directory = tempfile::tempdir().unwrap();
-            let executor = Arc::new(MockExecutor {
-                output: CommandOutput {
-                    success: true,
-                    stdout: format!("{idle}\n1000\n{available}\n").into_bytes(),
-                    stderr: Vec::new(),
-                },
-                error: None,
-                calls: Mutex::new(Vec::new()),
-            });
-            let context = test_context(directory.path(), executor);
-            let mut task = snmp_task("192.168.1.203");
-            task.payload.remove("detectionBundle");
-            task.payload.insert("pollPlan".into(), json!([
+        for available_key in ["system.memory.available_bytes", "system.memory.free_bytes"] {
+            for (idle, available, cpu, memory, total_key) in [
+                (
+                    99,
+                    250,
+                    Some(1.0),
+                    Some(750.0 * 1024.0),
+                    "system.memory.total_bytes",
+                ),
+                (
+                    99,
+                    250,
+                    Some(1.0),
+                    Some(750.0 * 1024.0),
+                    "system.memory.ucd_total_bytes",
+                ),
+                (
+                    101,
+                    250,
+                    None,
+                    Some(750.0 * 1024.0),
+                    "system.memory.total_bytes",
+                ),
+                (99, 1250, Some(1.0), None, "system.memory.total_bytes"),
+                (99, -1, Some(1.0), None, "system.memory.total_bytes"),
+                (
+                    99,
+                    0,
+                    Some(1.0),
+                    Some(1000.0 * 1024.0),
+                    "system.memory.total_bytes",
+                ),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let executor = Arc::new(MockExecutor {
+                    output: CommandOutput {
+                        success: true,
+                        stdout: format!("{idle}\n1000\n{available}\n").into_bytes(),
+                        stderr: Vec::new(),
+                    },
+                    error: None,
+                    calls: Mutex::new(Vec::new()),
+                });
+                let context = test_context(directory.path(), executor);
+                let mut task = snmp_task("192.168.1.203");
+                task.payload.remove("detectionBundle");
+                task.payload.insert("pollPlan".into(), json!([
                 { "oid": "1.3.6.1.4.1.2021.11.11.0", "metricKey": "system.cpu.idle_percent", "unit": "percent", "scale": 1, "valueType": "GAUGE", "required": false },
                 { "oid": "1.3.6.1.4.1.2021.4.5.0", "metricKey": total_key, "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
-                { "oid": "1.3.6.1.4.1.2021.4.6.0", "metricKey": "system.memory.available_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+                { "oid": "1.3.6.1.4.1.2021.4.27.0", "metricKey": available_key, "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
             ]));
-            collect_snmp(&context, &task).await.unwrap();
-            let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
-            let samples = batch["samples"].as_array().unwrap();
-            assert_eq!(
-                samples
-                    .iter()
-                    .find(|sample| sample["metricKey"] == "system.memory.total_bytes")
-                    .unwrap()["value"]
-                    .as_f64(),
-                Some(1000.0 * 1024.0)
-            );
-            for (key, expected) in [
-                ("system.cpu.utilization", cpu),
-                ("system.memory.used_bytes", memory),
-            ] {
-                let derived = samples
-                    .iter()
-                    .filter(|sample| sample["metricKey"] == key)
-                    .collect::<Vec<_>>();
-                assert_eq!(derived.len(), usize::from(expected.is_some()));
-                if let Some(expected) = expected {
-                    assert_eq!(derived[0]["value"].as_f64(), Some(expected));
-                    assert_eq!(derived[0]["metadata"]["source"], "SNMP-scalars");
+                collect_snmp(&context, &task).await.unwrap();
+                let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+                let samples = batch["samples"].as_array().unwrap();
+                assert_eq!(
+                    samples
+                        .iter()
+                        .find(|sample| sample["metricKey"] == "system.memory.total_bytes")
+                        .unwrap()["value"]
+                        .as_f64(),
+                    Some(1000.0 * 1024.0)
+                );
+                for (key, expected) in [
+                    ("system.cpu.utilization", cpu),
+                    ("system.memory.used_bytes", memory),
+                ] {
+                    let derived = samples
+                        .iter()
+                        .filter(|sample| sample["metricKey"] == key)
+                        .collect::<Vec<_>>();
+                    assert_eq!(derived.len(), usize::from(expected.is_some()));
+                    if let Some(expected) = expected {
+                        assert_eq!(derived[0]["value"].as_f64(), Some(expected));
+                        assert_eq!(derived[0]["metadata"]["source"], "SNMP-scalars");
+                    }
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn prefers_reclaimable_available_memory_over_free_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = Arc::new(MockExecutor {
+            output: CommandOutput {
+                success: true,
+                stdout: b"1000\n250\n750\n".to_vec(),
+                stderr: Vec::new(),
+            },
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let context = test_context(directory.path(), executor);
+        let mut task = snmp_task("192.168.1.203");
+        task.payload.remove("detectionBundle");
+        task.payload.insert("pollPlan".into(), json!([
+            { "oid": "1.3.6.1.4.1.2021.4.5.0", "metricKey": "system.memory.total_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+            { "oid": "1.3.6.1.4.1.2021.4.6.0", "metricKey": "system.memory.free_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+            { "oid": "1.3.6.1.4.1.2021.4.27.0", "metricKey": "system.memory.available_bytes", "unit": "bytes", "scale": 1024, "valueType": "GAUGE", "required": false },
+        ]));
+        collect_snmp(&context, &task).await.unwrap();
+        let (_, batch) = context.telemetry_spool.oldest::<Value>().unwrap().unwrap();
+        let used = batch["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|sample| sample["metricKey"] == "system.memory.used_bytes")
+            .unwrap();
+        assert_eq!(used["value"].as_f64(), Some(250.0 * 1024.0));
     }
 
     #[tokio::test]

@@ -87,16 +87,28 @@
       "priority": 50,
       "timeout_ms": 1000
     },
-    "ucd_memory_available": {
+    "ucd_memory_free": {
       "oid": "1.3.6.1.4.1.2021.4.6.0",
       "type": "integer",
+      "unit": "bytes",
+      "scale": 1024,
+      "transform": null,
+      "metric": "system.memory.free_bytes",
+      "required": false,
+      "optional": true,
+      "priority": 45,
+      "timeout_ms": 1000
+    },
+    "ucd_memory_available": {
+      "oid": "1.3.6.1.4.1.2021.4.27.0",
+      "type": "gauge",
       "unit": "bytes",
       "scale": 1024,
       "transform": null,
       "metric": "system.memory.available_bytes",
       "required": false,
       "optional": true,
-      "priority": 45,
+      "priority": 46,
       "timeout_ms": 1000
     }
   },
