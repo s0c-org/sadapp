@@ -22,7 +22,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
+use sysinfo::{
+    CpuRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind, ProcessesToUpdate,
+    RefreshKind, System,
+};
 
 #[cfg(windows)]
 mod windows;
@@ -116,9 +119,13 @@ struct CollectorHealth {
     name: String,
     status: String,
     last_collected_at: u64,
-    duration_ms: u64,
+    duration_ms: f64,
     interval_seconds: u64,
     last_error: Option<String>,
+}
+
+fn collector_duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
 }
 
 impl CollectorHealth {
@@ -127,7 +134,7 @@ impl CollectorHealth {
             name: name.into(),
             status: "unsupported".into(),
             last_collected_at: unix_timestamp(),
-            duration_ms: 0,
+            duration_ms: 0.0,
             interval_seconds,
             last_error: Some(reason.into()),
         }
@@ -155,7 +162,7 @@ impl CollectorHealth {
                 String::from("unavailable")
             },
             last_collected_at: unix_timestamp(),
-            duration_ms: started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            duration_ms: collector_duration_ms(started_at.elapsed()),
             interval_seconds,
             last_error: (!available).then(|| {
                 unavailable_message
@@ -1221,8 +1228,8 @@ fn run_agent(
         ipv4_network_info: fetch_ipv4_network_info(),
     };
 
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let mut sys = System::new_with_specifics(agent_refresh_kind());
+    sys.refresh_specifics(agent_refresh_kind());
     let static_inventory = collect_static_inventory(&sys, &startup_network);
     let update_lifecycle = if no_send {
         UpdateLifecycleState::reconcile(
@@ -2185,14 +2192,28 @@ fn collect_listening_ports() -> Vec<ListeningPort> {
     ports
 }
 
+fn agent_process_refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::nothing()
+        .with_cpu()
+        .with_memory()
+        .with_disk_usage()
+}
+
+fn agent_refresh_kind() -> RefreshKind {
+    RefreshKind::nothing()
+        .with_cpu(CpuRefreshKind::everything())
+        .with_memory(MemoryRefreshKind::everything())
+        .with_processes(agent_process_refresh_kind())
+}
+
 fn collect_medium_snapshot(interval_seconds: u64) -> MediumCollectorSnapshot {
-    let disk_started = Instant::now();
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let mut sys = System::new_with_specifics(agent_refresh_kind());
+    sys.refresh_specifics(agent_refresh_kind());
     if cfg!(windows) {
         thread::sleep(Duration::from_millis(250));
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, agent_process_refresh_kind());
     }
+    let disk_started = Instant::now();
     let disk_devices: Vec<DiskInfo> = Disks::new_with_refreshed_list()
         .iter()
         .map(|disk| DiskInfo {
@@ -2502,7 +2523,7 @@ fn gather_status(
     let heartbeat_started = Instant::now();
     sys.refresh_cpu_all();
     sys.refresh_memory();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, agent_process_refresh_kind());
 
     let cpu_count = sys.cpus().len();
     let cpu_usage_percent = sys.global_cpu_usage();
@@ -2629,6 +2650,30 @@ fn gather_status(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_refresh_collects_needed_process_fields_without_unused_details() {
+        use super::*;
+
+        let kind = agent_process_refresh_kind();
+        assert!(kind.cpu() && kind.memory() && kind.disk_usage() && kind.tasks());
+        assert_eq!(kind.cmd(), sysinfo::UpdateKind::Never);
+        assert_eq!(kind.environ(), sysinfo::UpdateKind::Never);
+        assert_eq!(kind.exe(), sysinfo::UpdateKind::Never);
+        assert_eq!(kind.cwd(), sysinfo::UpdateKind::Never);
+        assert_eq!(kind.root(), sysinfo::UpdateKind::Never);
+        assert_eq!(kind.user(), sysinfo::UpdateKind::Never);
+
+        let mut system = System::new_with_specifics(agent_refresh_kind());
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+        let process = system
+            .process(sysinfo::Pid::from_u32(std::process::id()))
+            .unwrap();
+        assert!(!process.name().is_empty());
+        assert!(process.memory() > 0);
+        assert!(!system.cpus().is_empty());
+        assert!(system.total_memory() > 0);
+    }
+
     #[test]
     fn bounded_gpu_query_reads_both_streams_and_reports_failures() {
         #[cfg(windows)]
@@ -3082,6 +3127,16 @@ mod tests {
         assert_eq!(health.status, "unavailable");
         assert_eq!(health.last_error.as_deref(), Some("smartctl unavailable"));
         assert_eq!(health.interval_seconds, 3600);
+    }
+
+    #[test]
+    fn collector_health_preserves_fractional_milliseconds() {
+        assert_eq!(collector_duration_ms(Duration::from_micros(125)), 0.125);
+        let health = CollectorHealth::completed("disk", Instant::now(), 60, true, None);
+        assert_eq!(
+            serde_json::to_value(&health).unwrap()["duration_ms"],
+            health.duration_ms
+        );
     }
 
     #[test]

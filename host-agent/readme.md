@@ -1,5 +1,10 @@
 SadApp host agent quick usage
 
+Collector health durations describe local collection work, not network latency.
+Disk duration covers disk inventory collection; the shared system refresh is
+not attributed to disk. New agent versions report fractional milliseconds;
+older agents report whole milliseconds.
+
 Windows x64 service/MSI prototype
 -------------------------------
 

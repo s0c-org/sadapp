@@ -1056,6 +1056,14 @@ async fn run_check(context: &TaskContext, payload: &Map<String, Value>) -> TaskO
     }
 }
 
+fn parse_icmp_latency_ms(stdout: &[u8]) -> Option<f64> {
+    let output = String::from_utf8_lossy(stdout);
+    let value = output.split_once("time=")?.1.split_whitespace().next()?;
+    let value = value.strip_suffix("ms").unwrap_or(value);
+    let latency_ms = value.parse::<f64>().ok()?;
+    (latency_ms.is_finite() && latency_ms >= 0.0).then_some(latency_ms)
+}
+
 async fn icmp_check(context: &TaskContext, payload: &Map<String, Value>) -> TaskOutcome {
     let target = text(payload, "target")?
         .parse::<IpAddr>()
@@ -1070,7 +1078,6 @@ async fn icmp_check(context: &TaskContext, payload: &Map<String, Value>) -> Task
         .validate_target(target)
         .map_err(|error| TaskError::policy(error.to_string()))?;
 
-    let started = Instant::now();
     let duration = task_timeout(payload);
     let timeout_secs = duration
         .as_secs()
@@ -1111,9 +1118,11 @@ async fn icmp_check(context: &TaskContext, payload: &Map<String, Value>) -> Task
         ));
     }
 
-    Ok(json_object(
-        json!({"success": true, "target": target.to_string(), "latencyMs": started.elapsed().as_secs_f64() * 1000.0}),
-    ))
+    Ok(json_object(json!({
+        "success": true,
+        "target": target.to_string(),
+        "latencyMs": parse_icmp_latency_ms(&output.stdout),
+    })))
 }
 
 fn icmp_command_args(target: IpAddr, timeout_secs: u64) -> Vec<String> {
@@ -3079,7 +3088,7 @@ async fn tcp_check(context: &TaskContext, payload: &Map<String, Value>) -> TaskO
         match timeout(task_timeout(payload), TcpStream::connect(address)).await {
             Ok(Ok(_)) => {
                 return Ok(json_object(
-                    json!({"success": true, "latencyMs": started.elapsed().as_millis(), "address": address.ip().to_string(), "port": port}),
+                    json!({"success": true, "latencyMs": started.elapsed().as_secs_f64() * 1000.0, "address": address.ip().to_string(), "port": port}),
                 ))
             }
             Ok(Err(error)) => last_error = Some(error.to_string()),
@@ -3133,7 +3142,7 @@ async fn http_check(context: &TaskContext, payload: &Map<String, Value>) -> Task
             TaskError::failed("HTTP_REQUEST_FAILED", message)
         })?;
     Ok(json_object(
-        json!({"success": response.status().is_success(), "latencyMs": started.elapsed().as_millis(), "statusCode": response.status().as_u16()}),
+        json!({"success": response.status().is_success(), "latencyMs": started.elapsed().as_secs_f64() * 1000.0, "statusCode": response.status().as_u16()}),
     ))
 }
 
@@ -3613,7 +3622,7 @@ mod tests {
         let executor = Arc::new(MockExecutor {
             output: CommandOutput {
                 success: true,
-                stdout: Vec::new(),
+                stdout: b"64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=0.347 ms\n".to_vec(),
                 stderr: Vec::new(),
             },
             error: None,
@@ -3625,9 +3634,35 @@ mod tests {
         let result = icmp_check(&context, &payload).await.unwrap();
 
         assert_eq!(result["success"], true);
+        assert_eq!(result["latencyMs"], 0.347);
         assert_eq!(
             executor.calls.lock().unwrap()[0],
             icmp_command_args("192.168.1.10".parse().unwrap(), 1)
+        );
+    }
+
+    #[test]
+    fn parses_icmp_round_trip_time_without_substituting_process_duration() {
+        assert_eq!(
+            parse_icmp_latency_ms(b"64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.04 ms"),
+            Some(0.04)
+        );
+        assert_eq!(
+            parse_icmp_latency_ms(b"64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=1.2ms"),
+            Some(1.2)
+        );
+        assert_eq!(
+            parse_icmp_latency_ms(b"64 bytes from 10.0.0.2: time<1 ms"),
+            None
+        );
+        assert_eq!(parse_icmp_latency_ms(b"ping output without an RTT"), None);
+        assert_eq!(
+            parse_icmp_latency_ms(b"64 bytes from 10.0.0.2: time=NaN ms"),
+            None
+        );
+        assert_eq!(
+            parse_icmp_latency_ms(b"64 bytes from 10.0.0.2: time=-1 ms"),
+            None
         );
     }
 

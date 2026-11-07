@@ -91,7 +91,13 @@ The collector starts with no allowed CIDRs and cannot perform network tasks unti
 
 `DISCOVER` uses bounded TCP probes against explicitly supplied ports. A task CIDR must be contained by collector policy and cannot exceed 4096 addresses. Candidate submissions use backend batches of at most 250.
 
-`RUN_CHECK` supports ICMP via the system `ping` executable, TCP, and HTTP/HTTPS. Credential rotation, self-upgrade, and arbitrary DNS check payloads are unsupported by the current protocol.
+`RUN_CHECK` supports ICMP via the system `ping` executable, TCP, and HTTP/HTTPS. ICMP latency is the numeric round-trip time reported by `ping`, not the process runtime; if the output has no exact RTT value, reachability can still succeed while latency is unavailable. Credential rotation, self-upgrade, and arbitrary DNS check payloads are unsupported by the current protocol.
+
+TCP and HTTP check timings begin after hostname resolution and address-policy
+validation. TCP includes connection attempts up to the first success; HTTP
+ends when response headers arrive. This differs from worker checks, which also
+include hostname resolution. SNMP latency measures the full collection task,
+including multiple requests and local processing, not a single packet RTT.
 
 ## SNMP collection
 

@@ -1,5 +1,5 @@
 //! Metadata-only discovery cache. Callers must obtain measurements and indices on every poll.
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -50,6 +50,8 @@ struct Entry<V, K> {
 
 pub struct DiscoveryCache<V, K = u32> {
     entries: HashMap<DiscoveryKey, Entry<V, K>>,
+    resources: HashMap<String, DiscoveryKey>,
+    by_insertion: BTreeMap<Instant, HashSet<DiscoveryKey>>,
     max_keys: usize,
 }
 
@@ -57,6 +59,8 @@ impl<V, K> Default for DiscoveryCache<V, K> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
+            resources: HashMap::new(),
+            by_insertion: BTreeMap::new(),
             max_keys: DISCOVERY_MAX_KEYS,
         }
     }
@@ -66,6 +70,8 @@ impl<V: Clone, K: Clone + Ord> DiscoveryCache<V, K> {
     pub fn with_capacity(max_keys: usize) -> Self {
         Self {
             entries: HashMap::new(),
+            resources: HashMap::new(),
+            by_insertion: BTreeMap::new(),
             max_keys: max_keys.clamp(1, DISCOVERY_MAX_KEYS),
         }
     }
@@ -84,7 +90,7 @@ impl<V: Clone, K: Clone + Ord> DiscoveryCache<V, K> {
                 && !indices.is_empty()
         });
         if !valid {
-            self.entries.remove(key);
+            self.remove(key);
             return None;
         }
         let entry = self.entries.get_mut(key)?;
@@ -102,23 +108,29 @@ impl<V: Clone, K: Clone + Ord> DiscoveryCache<V, K> {
     ) {
         self.expire(&key, now);
         let Some(uptime) = uptime_seconds.filter(|value| value.is_finite() && *value >= 0.0) else {
-            self.entries.remove(&key);
+            self.remove(&key);
             return;
         };
         if indices.is_empty() {
-            self.entries.remove(&key);
+            self.remove(&key);
             return;
         }
         if !self.entries.contains_key(&key) && self.entries.len() >= self.max_keys {
             if let Some(oldest) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.inserted)
-                .map(|(key, _)| key.clone())
+                .by_insertion
+                .first_key_value()
+                .and_then(|(_, keys)| keys.iter().next())
+                .cloned()
             {
-                self.entries.remove(&oldest);
+                self.remove(&oldest);
             }
         }
+        self.remove(&key);
+        self.resources.insert(key.resource.clone(), key.clone());
+        self.by_insertion
+            .entry(now)
+            .or_default()
+            .insert(key.clone());
         self.entries.insert(
             key,
             Entry {
@@ -131,10 +143,39 @@ impl<V: Clone, K: Clone + Ord> DiscoveryCache<V, K> {
     }
 
     fn expire(&mut self, key: &DiscoveryKey, now: Instant) {
-        self.entries.retain(|existing, entry| {
-            now.saturating_duration_since(entry.inserted) < DISCOVERY_TTL
-                && (existing.resource != key.resource || existing == key)
-        });
+        while let Some((&inserted, keys)) = self.by_insertion.first_key_value() {
+            if now.saturating_duration_since(inserted) < DISCOVERY_TTL {
+                break;
+            }
+            let expired = keys
+                .iter()
+                .next()
+                .expect("non-empty insertion bucket")
+                .clone();
+            self.remove(&expired);
+        }
+        if let Some(previous) = self
+            .resources
+            .get(&key.resource)
+            .filter(|previous| *previous != key)
+            .cloned()
+        {
+            self.remove(&previous);
+        }
+    }
+
+    fn remove(&mut self, key: &DiscoveryKey) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.resources.remove(&key.resource);
+            let keys = self
+                .by_insertion
+                .get_mut(&entry.inserted)
+                .expect("cache insertion index");
+            keys.remove(key);
+            if keys.is_empty() {
+                self.by_insertion.remove(&entry.inserted);
+            }
+        }
     }
 }
 
@@ -267,5 +308,49 @@ mod tests {
             DISCOVERY_MAX_KEYS
         );
         assert_eq!(DiscoveryCache::<()>::with_capacity(0).max_keys, 1);
+    }
+
+    #[test]
+    fn indexes_stay_consistent_after_replacement_invalidation_and_expiration() {
+        let now = Instant::now();
+        let indices = BTreeSet::from([1]);
+        let first = DiscoveryKey::new("first", "host", "profile", "2c", &[]);
+        let changed = DiscoveryKey::new("first", "new-host", "profile", "2c", &[]);
+        let second = DiscoveryKey::new("second", "host", "profile", "2c", &[]);
+        let mut cache = DiscoveryCache::with_capacity(2);
+        cache.insert(first.clone(), 1, Some(10.0), indices.clone(), now);
+        cache.insert(second.clone(), 2, Some(10.0), indices.clone(), now);
+        cache.insert(
+            first.clone(),
+            3,
+            Some(11.0),
+            indices.clone(),
+            now + Duration::from_secs(1),
+        );
+        assert_eq!(cache.get(&first, Some(12.0), &indices, now), Some(3));
+        assert_eq!(cache.get(&changed, Some(12.0), &indices, now), None);
+        assert!(!cache.entries.contains_key(&first));
+        cache.insert(
+            changed.clone(),
+            4,
+            Some(12.0),
+            indices.clone(),
+            now + Duration::from_secs(2),
+        );
+        assert_eq!(
+            cache.get(&second, Some(11.0), &indices, now + DISCOVERY_TTL),
+            None
+        );
+        assert_eq!(
+            cache.get(&changed, Some(13.0), &indices, now + DISCOVERY_TTL),
+            Some(4)
+        );
+        assert_eq!(
+            cache.get(&changed, None, &indices, now + DISCOVERY_TTL),
+            None
+        );
+        assert!(cache.entries.is_empty());
+        assert!(cache.resources.is_empty());
+        assert!(cache.by_insertion.is_empty());
     }
 }
