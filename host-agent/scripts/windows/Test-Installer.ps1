@@ -264,6 +264,33 @@ function Assert-Condition {
     }
 }
 
+function Read-TelemetryQueue {
+    param([string] $Path)
+
+    # Read a complete snapshot without preventing the service from replacing it.
+    $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    for ($attempt = 0; ; $attempt++) {
+        try {
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+            break
+        } catch [IO.IOException] {
+            # Retry a transient Windows sharing or lock violation only.
+            if ($attempt -ge 20 -or ($_.Exception.HResult -band 0xffff) -notin @(32, 33)) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    try {
+        $reader = [IO.StreamReader]::new($stream)
+        try {
+            $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
+        } finally {
+            $reader.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Assert-ChecksumManifest {
     param([string] $Sums)
 
@@ -798,7 +825,7 @@ try {
         'The health projection must be readable but not writable by ordinary users.'
     $collectorDeadline = (Get-Date).AddSeconds(60)
     do {
-        $collectorQueue = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+        $collectorQueue = Read-TelemetryQueue -Path $queuePath
         $latestCollectors = @($collectorQueue.items)[-1].payload.agent_health.collectors
         $collected = @($latestCollectors | Where-Object { $_.name -in @('ports', 'logs') })
         if ($collected.Count -eq 2) { break }
@@ -814,7 +841,7 @@ try {
     }
     $slowDeadline = (Get-Date).AddSeconds(150)
     do {
-        $collectorQueue = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+        $collectorQueue = Read-TelemetryQueue -Path $queuePath
         $slowCollectors = @(@($collectorQueue.items)[-1].payload.agent_health.collectors |
             Where-Object { $_.name -in @('smart', 'packages') })
         if ($slowCollectors.Count -eq 2) { break }
@@ -847,7 +874,7 @@ try {
     $persistentFiles = @(Get-ChildItem -LiteralPath $dataDirectory -File -Recurse |
         Where-Object { $_.FullName -ne $configPath -and $_.FullName -ne $trayStatusPath })
     $persistentRelativePaths = @($persistentFiles | ForEach-Object { $_.FullName.Substring($dataDirectory.Length).TrimStart('\') })
-    $queueBeforeUpgrade = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+    $queueBeforeUpgrade = Read-TelemetryQueue -Path $queuePath
     $queuedIdsBeforeUpgrade = @($queueBeforeUpgrade.items | Select-Object -ExpandProperty id)
     Assert-Condition ($queuedIdsBeforeUpgrade.Count -gt 0) `
         'The offline test must retain actual telemetry samples, not merely an empty queue file.'
@@ -855,7 +882,7 @@ try {
     & $InstallScriptPath -MsiPath $UpgradeMsiPath
     $installedMsiPath = $UpgradeMsiPath
     Assert-InstalledExecutable
-    $queueAfterUpgrade = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
+    $queueAfterUpgrade = Read-TelemetryQueue -Path $queuePath
     $queuedIdsAfterUpgrade = @($queueAfterUpgrade.items | Select-Object -ExpandProperty id)
     foreach ($queuedId in $queuedIdsBeforeUpgrade) {
         Assert-Condition ($queuedIdsAfterUpgrade -contains $queuedId) `
