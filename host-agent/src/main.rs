@@ -27,6 +27,8 @@ use sysinfo::{
     RefreshKind, System,
 };
 
+#[cfg(any(windows, test))]
+mod tray_status;
 #[cfg(windows)]
 mod windows;
 mod windows_config;
@@ -985,6 +987,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     | "--configure"
                     | "--validate-config"
                     | "--validate-service"
+                    | "--diagnose"
                     | "--purge-state"
             )
         }) {
@@ -1004,6 +1007,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(())
                 }
                 "--validate-service" => windows::validate_service(),
+                "--diagnose" => {
+                    println!("{}", tray_status::local_diagnostics()?);
+                    Ok(())
+                }
                 "--purge-state" => windows::purge_state(),
                 _ => unreachable!(),
             };
@@ -1269,6 +1276,25 @@ fn run_agent(
     let mut last_logs_sent_at = 0_u64;
     let mut last_updates_sent_at = 0_u64;
     let mut delivery_health = DeliveryHealth::new(unix_timestamp());
+    #[cfg(windows)]
+    let mut tray = windows::is_service().then(|| tray_status::TrayStatus {
+        pid: std::process::id(),
+        started_at: delivery_health.started_at,
+        interval_seconds: interval.as_secs(),
+        last_success: None,
+        retrying: false,
+        version: agent_version().to_string(),
+        available_version: None,
+        diagnostics: None,
+    });
+    #[cfg(windows)]
+    let (mut last_release_check, mut release_result) = (None::<Instant>, None);
+    #[cfg(windows)]
+    if let Some(status) = &tray {
+        if let Err(error) = windows::publish_tray_status(status) {
+            windows::write_log(&format!("Tray status unavailable: {error}"));
+        }
+    }
     let mut telemetry_queue = if no_send {
         None
     } else {
@@ -1286,6 +1312,25 @@ fn run_agent(
         }
         let final_cycle = shutdown_requested.load(Ordering::Acquire);
         let now = unix_timestamp();
+        #[cfg(windows)]
+        if tray.is_some()
+            && !final_cycle
+            && last_release_check.is_none_or(|last| last.elapsed() >= Duration::from_secs(3600))
+        {
+            last_release_check = Some(Instant::now());
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let (endpoint, channel) = (endpoint.clone(), update_channel.clone());
+            match thread::Builder::new()
+                .name("release-metadata".into())
+                .spawn(move || {
+                    let result = tray_status::check_update(&endpoint, agent_version(), &channel)
+                        .map_err(|error| error.to_string());
+                    let _ = sender.send(result);
+                }) {
+                Ok(_) => release_result = Some(receiver),
+                Err(error) => windows::write_log(&format!("Cannot start release check: {error}")),
+            }
+        }
         if !final_cycle
             && collector_due(
                 now,
@@ -1516,6 +1561,50 @@ fn run_agent(
             }
             delivery_health.queue_depth = telemetry_queue.len();
             delivery_health.dropped_samples = telemetry_queue.dropped_samples();
+        }
+        #[cfg(windows)]
+        if let Some(status) = &mut tray {
+            if let Some(receiver) = &release_result {
+                match receiver.try_recv() {
+                    Ok(result) => {
+                        release_result = None;
+                        status.available_version = match result {
+                            Ok(version) => version,
+                            Err(error) => {
+                                windows::write_log(&format!(
+                                    "Agent update check unavailable: {error}"
+                                ));
+                                None
+                            }
+                        };
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        release_result = None;
+                        status.available_version = None;
+                        windows::write_log("Agent update check ended without a result");
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            status.last_success = delivery_health.last_successful_submit_at;
+            status.retrying = delivery_health.consecutive_failures > 0;
+            status.diagnostics = Some(tray_status::DeliveryDiagnostics {
+                queued: delivery_health.queue_depth,
+                oldest_queued_at: telemetry_queue.as_ref().and_then(|queue| {
+                    queue
+                        .state
+                        .items
+                        .iter()
+                        .map(|sample| sample.timestamp)
+                        .min()
+                }),
+                dropped: delivery_health.dropped_samples,
+                consecutive_failures: delivery_health.consecutive_failures,
+                last_failed_at: delivery_health.last_failed_submit_at,
+            });
+            if let Err(error) = windows::publish_tray_status(status) {
+                windows::write_log(&format!("Tray status unavailable: {error}"));
+            }
         }
 
         if registration_once || final_cycle || shutdown_requested.load(Ordering::Acquire) {

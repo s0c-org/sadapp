@@ -6,6 +6,7 @@ use url::Url;
 pub const MIN_HEARTBEAT_SECONDS: u64 = 5;
 pub const MAX_HEARTBEAT_SECONDS: u64 = 300;
 pub const MAX_CONCURRENT_TASKS: usize = 32;
+pub const MAX_PROBE_CONCURRENCY: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -16,6 +17,7 @@ pub struct Config {
     pub state_dir: PathBuf,
     pub heartbeat_interval: Duration,
     pub max_concurrent_tasks: usize,
+    pub discovery_probe_limit: usize,
     pub health_port: Option<u16>,
     pub spool_max_items: usize,
     pub spool_max_bytes: u64,
@@ -49,6 +51,11 @@ impl Config {
         if !(1..=MAX_CONCURRENT_TASKS).contains(&max_concurrent_tasks) {
             bail!("MAX_CONCURRENT_TASKS must be between 1 and {MAX_CONCURRENT_TASKS}");
         }
+        let discovery_probe_limit =
+            parse(&mut lookup, "MAX_DISCOVERY_PROBES", MAX_PROBE_CONCURRENCY)?;
+        if !(1..=MAX_PROBE_CONCURRENCY).contains(&discovery_probe_limit) {
+            bail!("MAX_DISCOVERY_PROBES must be between 1 and {MAX_PROBE_CONCURRENCY}");
+        }
 
         let enrollment_token = lookup("ENROLLMENT_TOKEN").filter(|value| !value.is_empty());
         let collector_id = lookup("COLLECTOR_ID").filter(|value| !value.is_empty());
@@ -68,6 +75,7 @@ impl Config {
             ),
             heartbeat_interval: Duration::from_secs(heartbeat_seconds),
             max_concurrent_tasks,
+            discovery_probe_limit,
             health_port: optional_parse(&mut lookup, "HEALTH_PORT")?,
             spool_max_items: parse(&mut lookup, "SPOOL_MAX_ITEMS", 10_000_usize)?,
             spool_max_bytes: parse(&mut lookup, "SPOOL_MAX_BYTES", 64 * 1024 * 1024_u64)?,
@@ -130,9 +138,11 @@ mod tests {
         let value = config(&[
             ("CONTROL_PLANE_URL", "https://control.example"),
             ("MAX_CONCURRENT_TASKS", "8"),
+            ("MAX_DISCOVERY_PROBES", "4"),
         ])
         .unwrap();
         assert_eq!(value.max_concurrent_tasks, 8);
+        assert_eq!(value.discovery_probe_limit, 4);
         assert_eq!(value.heartbeat_interval, Duration::from_secs(30));
     }
 
@@ -144,6 +154,13 @@ mod tests {
             ("HEARTBEAT_INTERVAL_SECONDS", "1")
         ])
         .is_err());
+        for limit in ["0", "65"] {
+            assert!(config(&[
+                ("CONTROL_PLANE_URL", "https://control.example"),
+                ("MAX_DISCOVERY_PROBES", limit),
+            ])
+            .is_err());
+        }
         assert!(config(&[
             ("CONTROL_PLANE_URL", "https://control.example"),
             ("MAX_CONCURRENT_TASKS", "0")

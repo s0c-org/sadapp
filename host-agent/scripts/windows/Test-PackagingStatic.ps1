@@ -78,6 +78,9 @@ $shortcut = $wix.SelectSingleNode('//w:File[@Id="HostAgentExecutable"]/w:Shortcu
 Assert-Static ($null -ne $shortcut -and $shortcut.GetAttribute('Arguments') -eq '--setup' -and
     $shortcut.GetAttribute('Directory') -eq 'SadappProgramMenuFolder') `
     'The MSI must expose native guided setup in the Start menu without enrollment arguments.'
+$tray = $wix.SelectSingleNode('//w:File[@Id="HostAgentTrayExecutable"]/w:Shortcut', $namespace)
+Assert-Static ($null -ne $tray -and $tray.GetAttribute('Directory') -eq 'SadappProgramMenuFolder' -and
+    -not $tray.HasAttribute('Arguments')) 'The MSI must expose the separate tray companion in the Start menu.'
 Assert-Static ($serviceConfig.GetAttribute('OnInstall') -eq 'yes' -and
     $serviceConfig.GetAttribute('OnReinstall') -eq 'yes') `
     'MSI must apply the service configuration on installation and repair.'

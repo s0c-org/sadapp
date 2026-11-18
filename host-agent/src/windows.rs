@@ -40,7 +40,7 @@ use windows_sys::Win32::{
     },
 };
 
-pub const SERVICE_NAME: &str = "SadappHostAgent";
+pub use crate::tray_status::{SERVICE_NAME, state_dir};
 pub const INVENTORY_SERVICE_NAME: &str = "SadappHostAgentInventory";
 static SERVICE_MODE: AtomicBool = AtomicBool::new(false);
 static INVENTORY_MODE: AtomicBool = AtomicBool::new(false);
@@ -81,33 +81,6 @@ pub fn check_logging() -> io::Result<()> {
     }
 }
 
-pub fn state_dir() -> io::Result<PathBuf> {
-    use windows_sys::Win32::{
-        System::Com::CoTaskMemFree,
-        UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath},
-    };
-    let mut folder = ptr::null_mut();
-    let result =
-        unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, 0, ptr::null_mut(), &mut folder) };
-    if result < 0 {
-        return Err(io::Error::other(format!(
-            "Cannot resolve ProgramData (HRESULT {result:#x})"
-        )));
-    }
-    let base = unsafe {
-        let mut length = 0;
-        while *folder.add(length) != 0 {
-            length += 1;
-        }
-        let path = PathBuf::from(String::from_utf16_lossy(std::slice::from_raw_parts(
-            folder, length,
-        )));
-        CoTaskMemFree(folder.cast());
-        path
-    };
-    Ok(base.join("Sadapp").join("HostAgent"))
-}
-
 fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
@@ -127,6 +100,10 @@ fn reject_reparse(path: &Path) -> io::Result<()> {
 }
 
 pub fn protect(path: &Path, read_only_service: bool) -> io::Result<()> {
+    protect_with_tray_read(path, read_only_service, false)
+}
+
+fn protect_with_tray_read(path: &Path, read_only_service: bool, tray_read: bool) -> io::Result<()> {
     reject_reparse(path)?;
     let service_rights = if read_only_service { "FR" } else { "FA" };
     let sid = service_sid();
@@ -135,7 +112,8 @@ pub fn protect(path: &Path, read_only_service: bool) -> io::Result<()> {
         let rights = if read_only_service { "GRGX" } else { "FA" };
         format!("D:P(A;OICI;RC;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;{rights};;;{sid})")
     } else {
-        format!("D:P(A;;RC;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)(A;;{service_rights};;;{sid})")
+        let readers = if tray_read { "(A;;FR;;;BU)" } else { "" };
+        format!("D:P(A;;RC;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)(A;;{service_rights};;;{sid}){readers}")
     };
     let descriptor = if read_only_service {
         format!("O:BA{descriptor}")
@@ -192,6 +170,22 @@ pub fn prepare_state_dir() -> io::Result<PathBuf> {
 }
 
 pub fn atomic_write(path: &Path, data: &[u8], read_only_service: bool) -> io::Result<()> {
+    atomic_write_with_tray_read(path, data, read_only_service, false)
+}
+
+pub fn publish_tray_status(status: &crate::tray_status::TrayStatus) -> io::Result<()> {
+    let path = state_dir()?
+        .join("state")
+        .join(crate::tray_status::FILE_NAME);
+    atomic_write_with_tray_read(&path, &serde_json::to_vec(status)?, false, true)
+}
+
+fn atomic_write_with_tray_read(
+    path: &Path,
+    data: &[u8],
+    read_only_service: bool,
+    tray_read: bool,
+) -> io::Result<()> {
     reject_reparse(path)?;
     let mut random = [0_u8; 16];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut random)
@@ -203,11 +197,13 @@ pub fn atomic_write(path: &Path, data: &[u8], read_only_service: bool) -> io::Re
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        protect(&temporary, read_only_service)?;
+        protect_with_tray_read(&temporary, read_only_service, tray_read)?;
         file.write_all(data)?;
-        file.sync_all()?;
+        if !tray_read {
+            file.sync_all()?;
+        }
         drop(file);
-        protect(&temporary, read_only_service)?;
+        protect_with_tray_read(&temporary, read_only_service, tray_read)?;
         let source = wide(temporary.as_os_str());
         let target = wide(path.as_os_str());
         // Unlike rename assumptions across platforms, replacement and durability are explicit.
@@ -215,7 +211,7 @@ pub fn atomic_write(path: &Path, data: &[u8], read_only_service: bool) -> io::Re
             MoveFileExW(
                 source.as_ptr(),
                 target.as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                MOVEFILE_REPLACE_EXISTING | if tray_read { 0 } else { MOVEFILE_WRITE_THROUGH },
             )
         } == 0
         {
@@ -602,6 +598,7 @@ pub fn purge_state() -> Result<(), Box<dyn std::error::Error>> {
         "windows-update-inventory.json",
         "state/telemetry-queue.json",
         "state/update-state.json",
+        "state/tray-status.json",
         "state/event-log-state.json",
         "state/agent.log",
         "state/agent.log.old",
@@ -732,8 +729,17 @@ fn service_worker() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "Service status handle already initialized")?;
     handle.set_service_status(status(ServiceState::StartPending, 0))?;
     let result = (|| {
+        use windows_sys::Win32::System::Threading::{
+            BELOW_NORMAL_PRIORITY_CLASS, GetCurrentProcess, SetPriorityClass,
+        };
         if inventory {
             prepare_state_dir()?;
+            if unsafe { SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS) } == 0 {
+                write_log(&format!(
+                    "Cannot lower inventory scheduling priority: {}",
+                    io::Error::last_os_error()
+                ));
+            }
             handle.set_service_status(status(ServiceState::Running, 0))?;
             return crate::windows_inventory::produce_snapshots(shutdown).map_err(Into::into);
         }
@@ -741,6 +747,12 @@ fn service_worker() -> Result<(), Box<dyn std::error::Error>> {
         reject_reparse(&path)?;
         reject_reparse(&path.join("state"))?;
         initialize_log(&path.join("state").join("agent.log"))?;
+        if unsafe { SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS) } == 0 {
+            write_log(&format!(
+                "Cannot lower agent scheduling priority: {}",
+                io::Error::last_os_error()
+            ));
+        }
         let config = load_config()?;
         handle.set_service_status(status(ServiceState::Running, 0))?;
         write_log("Service running as configured; TLS verification remains enabled.");

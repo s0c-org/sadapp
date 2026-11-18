@@ -48,6 +48,8 @@ $inventoryServiceName = 'SadappHostAgentInventory'
 $installDirectory = Join-Path $env:ProgramFiles 'Sadapp\HostAgent'
 $installedExe = Join-Path $installDirectory 'sadapp-host-agent.exe'
 $setupShortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Sadapp\Set up Sadapp Host Agent.lnk'
+$trayShortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Sadapp\Sadapp Agent Status.lnk'
+$installedTray = Join-Path $installDirectory 'sadapp-host-agent-tray.exe'
 $null = Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -584,6 +586,9 @@ function Assert-InstalledExecutable {
     $installedHash = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash
     Assert-Condition ($installedHash -eq $expectedHash) `
         'The MSI must install the exact signed executable distributed alongside it.'
+    $traySignature = Get-AuthenticodeSignature -FilePath $installedTray
+    Assert-Condition ($traySignature.Status -eq 'Valid' -and $traySignature.SignerCertificate.Thumbprint -eq $thumbprint) `
+        'The installed tray companion must be signed by the expected publisher.'
 }
 
 function Invoke-MsiUninstall {
@@ -647,6 +652,10 @@ try {
     $shortcut = $shell.CreateShortcut($setupShortcut)
     Assert-Condition ($shortcut.TargetPath -eq $installedExe -and $shortcut.Arguments -eq '--setup') `
         'The setup shortcut must launch the installed agent without credentials.'
+    Assert-Condition (Test-Path -LiteralPath $trayShortcut -PathType Leaf) 'The MSI did not install the tray shortcut.'
+    $trayLink = $shell.CreateShortcut($trayShortcut)
+    Assert-Condition ($trayLink.TargetPath -eq $installedTray -and -not $trayLink.Arguments) `
+        'The tray shortcut must launch only the companion.'
     & $installedExe --validate-service
     if ($LASTEXITCODE -ne 0) { throw 'The installed service recovery policy is invalid.' }
     $resolvedServiceSid = ([Security.Principal.NTAccount]::new('NT SERVICE\SadappHostAgent')).Translate(
@@ -770,6 +779,23 @@ try {
         Assert-StateFileAcl -Path $updateStatePath
     }
     Assert-StateFileAcl -Path $queuePath
+    $trayStatusPath = Join-Path $stateDirectory 'tray-status.json'
+    $trayDeadline = (Get-Date).AddSeconds(30)
+    do {
+        $trayStatus = Get-Content -LiteralPath $trayStatusPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+        if ($trayStatus.retrying) { break }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $trayDeadline)
+    Assert-Condition ($trayStatus.retrying -and $null -eq $trayStatus.last_success) `
+        'An offline endpoint must publish retrying and never report a successful delivery.'
+    $trayAcl = Get-Acl -LiteralPath $trayStatusPath
+    $usersSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+    $readRule = @($trayAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+        Where-Object IdentityReference -eq $usersSid)
+    Assert-Condition ($trayAcl.AreAccessRulesProtected -and $readRule.Count -eq 1 -and
+        ($readRule[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadData) -ne 0 -and
+        ($readRule[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::WriteData) -eq 0) `
+        'The health projection must be readable but not writable by ordinary users.'
     $collectorDeadline = (Get-Date).AddSeconds(60)
     do {
         $collectorQueue = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
@@ -819,7 +845,7 @@ try {
     Set-Acl -LiteralPath $sentinelPath -AclObject $sentinelAcl
     Assert-StateFileAcl -Path $sentinelPath
     $persistentFiles = @(Get-ChildItem -LiteralPath $dataDirectory -File -Recurse |
-        Where-Object { $_.FullName -ne $configPath })
+        Where-Object { $_.FullName -ne $configPath -and $_.FullName -ne $trayStatusPath })
     $persistentRelativePaths = @($persistentFiles | ForEach-Object { $_.FullName.Substring($dataDirectory.Length).TrimStart('\') })
     $queueBeforeUpgrade = Get-Content -LiteralPath $queuePath -Raw | ConvertFrom-Json
     $queuedIdsBeforeUpgrade = @($queueBeforeUpgrade.items | Select-Object -ExpandProperty id)
@@ -902,6 +928,8 @@ try {
         'MSI uninstall left the privileged inventory helper registered.'
     Assert-Condition (-not (Test-Path -LiteralPath $installedExe)) 'MSI uninstall left the agent executable installed.'
     Assert-Condition (-not (Test-Path -LiteralPath $setupShortcut)) 'MSI uninstall left the setup shortcut behind.'
+    Assert-Condition (-not (Test-Path -LiteralPath $trayShortcut) -and -not (Test-Path -LiteralPath $installedTray)) `
+        'MSI uninstall left the tray companion behind.'
     Assert-Condition (Test-Path -LiteralPath $configPath) 'MSI uninstall removed the protected enrollment config.'
     Assert-Condition (Test-Path -LiteralPath $queuePath) 'MSI uninstall removed the persisted telemetry queue.'
     Assert-Condition ((Get-FileHash -LiteralPath $queuePath -Algorithm SHA256).Hash -eq $queueHashBeforeUninstall) `
@@ -928,6 +956,7 @@ try {
     }
     Assert-Condition (-not (Test-Path -LiteralPath $configPath)) 'Explicit state purge left the protected config behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $queuePath)) 'Explicit state purge left the telemetry queue behind.'
+    Assert-Condition (-not (Test-Path -LiteralPath $trayStatusPath)) 'Explicit state purge left tray status behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $updateStatePath)) 'Explicit state purge left update state behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $eventLogStatePath)) 'Explicit state purge left Event Log delivery state behind.'
     Assert-Condition (-not (Test-Path -LiteralPath $inventoryCachePath)) 'Explicit state purge left the Windows Update snapshot behind.'

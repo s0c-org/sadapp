@@ -77,7 +77,7 @@ fn collect_resource_usage(
     system: &mut System,
     state_dir: &Path,
 ) -> sadapp_local_network_collector::model::CollectorResourceUsage {
-    system.refresh_cpu_all();
+    system.refresh_cpu_usage();
     system.refresh_memory();
     let disks = Disks::new_with_refreshed_list();
 
@@ -180,12 +180,13 @@ async fn main() -> Result<()> {
         draining: draining.clone(),
         telemetry_spool: telemetry_spool.clone(),
         command_executor: Arc::new(TokioCommandExecutor),
+        discovery_probe_limit: config.discovery_probe_limit,
     };
     const SATURATED_RECLAIM_DELAY: Duration = Duration::from_millis(500);
     let mut tasks = JoinSet::new();
     let mut backoff = config.heartbeat_interval.min(Duration::from_secs(60));
-    let mut resource_system = System::new_all();
-    resource_system.refresh_all();
+    let mut resource_system = System::new();
+    resource_system.refresh_cpu_usage();
 
     loop {
         let mut claim_saturated = false;

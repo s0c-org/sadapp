@@ -12,6 +12,7 @@
 
     <Feature Id="HostAgent" Title="Sadapp Host Agent" Level="1">
       <ComponentRef Id="HostAgentService" />
+      <ComponentRef Id="HostAgentTray" />
     </Feature>
 
     <StandardDirectory Id="ProgramMenuFolder">
@@ -21,6 +22,13 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="SadappFolder" Name="Sadapp">
         <Directory Id="INSTALLFOLDER" Name="HostAgent">
+          <Component Id="HostAgentTray" Guid="16b9e8e2-328b-4ee9-a526-88bc9271f77b">
+            <File Id="HostAgentTrayExecutable" Source="$(var.TrayExe)" KeyPath="yes">
+              <Shortcut Id="HostAgentTrayShortcut" Directory="SadappProgramMenuFolder"
+                Name="Sadapp Agent Status" Description="Show telemetry and update status in the system tray."
+                WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+            </File>
+          </Component>
           <Component Id="HostAgentService" Guid="e20b49ef-fb12-4c14-87b0-616651a8ca0f">
             <File Id="HostAgentExecutable" Source="$(var.AgentExe)" KeyPath="yes">
               <Shortcut Id="HostAgentSetupShortcut"

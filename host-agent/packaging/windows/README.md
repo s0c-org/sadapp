@@ -97,10 +97,33 @@ state is separated from the protected config under
 - `update-state.json` — update and rollback state.
 - `event-log-state.json` — acknowledged Event Log bookmarks and pending delivery batch.
 - `agent.log` and `agent.log.old` — service logs.
+- `tray-status.json` — the only state file readable by ordinary users. It holds
+  the service PID, delivery timestamps, retry state, and version information;
+  it never contains credentials, telemetry payloads, or raw errors.
 
 The service-specific SID has write access to this state directory; ordinary
 users do not have access. These files persist through MSI upgrades and
 uninstall.
+
+Open **Sadapp Agent Status** from the Start menu to show the native tray icon.
+Green means the service has delivered telemetry recently. Amber means it is
+starting, retrying, or has not yet published status; red means the service
+stopped or delivery is stale (more than three reporting intervals, with a
+two-minute minimum). Exiting the tray does not stop monitoring.
+
+The service checks the control plane's public release catalog at most hourly
+and publishes the latest eligible Windows x64 MSI version in the tray status.
+The installed prototype channel follows Windows canary releases. An available
+update is shown in the tooltip and tray menu without changing the health color.
+The tray makes no network requests and never shows pop-ups, downloads, installs,
+or restarts anything. Both Windows services use below-normal CPU priority;
+monitoring intervals and queue policy are unchanged.
+
+Use **Copy local diagnostics** in the tray menu, or run
+`sadapp-host-agent.exe --diagnose` from PowerShell. The report shows the current
+delivery state, last success, queue depth, oldest queued sample age, retry count
+and dropped samples. It does not read the enrollment configuration, raw logs or
+queued payloads, and it is not uploaded automatically.
 
 ## Capability and trust limits
 

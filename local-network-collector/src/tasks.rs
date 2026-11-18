@@ -61,7 +61,6 @@ use crate::{
 };
 
 const MAX_DISCOVERY_PORTS: usize = 32;
-const MAX_PROBE_CONCURRENCY: usize = 64;
 const MAX_DISCOVERY_PORT_CONCURRENCY: usize = 4;
 const MAX_HTTP_DISCOVERY_CONCURRENCY: usize = 2;
 const HTTP_DISCOVERY_PORTS: &[u16] = &[
@@ -284,6 +283,7 @@ pub struct TaskContext {
     pub draining: Arc<AtomicBool>,
     pub telemetry_spool: Spool,
     pub command_executor: Arc<dyn CommandExecutor>,
+    pub discovery_probe_limit: usize,
 }
 
 pub async fn execute(context: &TaskContext, task: TaskLease) -> TaskResult {
@@ -912,7 +912,7 @@ async fn discover(context: &TaskContext, payload: &Map<String, Value>) -> TaskOu
         .get("concurrency")
         .and_then(Value::as_u64)
         .unwrap_or(16)
-        .clamp(1, MAX_PROBE_CONCURRENCY as u64) as usize;
+        .clamp(1, context.discovery_probe_limit as u64) as usize;
     let probe_timeout = task_timeout(payload);
     let policy = context
         .config
@@ -3726,6 +3726,7 @@ mod tests {
             draining: Arc::new(AtomicBool::new(false)),
             telemetry_spool: Spool::open(directory, "telemetry", 10, 100_000).unwrap(),
             command_executor: executor,
+            discovery_probe_limit: crate::config::MAX_PROBE_CONCURRENCY,
         }
     }
 

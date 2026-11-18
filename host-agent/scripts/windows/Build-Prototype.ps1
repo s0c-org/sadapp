@@ -45,6 +45,7 @@ function Invoke-WixBuild {
         -ext WixToolset.Util.wixext `
         -d "ProductVersion=$PackageVersion" `
         -d "AgentExe=$script:SignedAgentExe" `
+        -d "TrayExe=$script:SignedTrayExe" `
         -o $Destination `
         (Join-Path $PSScriptRoot '..\..\packaging\windows\host-agent.wxs')
     if ($LASTEXITCODE -ne 0) {
@@ -146,6 +147,11 @@ try {
     Copy-Item -LiteralPath $AgentExe -Destination $agentCopy -Force
     Invoke-Sign -Path $agentCopy
     $script:SignedAgentExe = $agentCopy
+    $traySource = Join-Path (Split-Path -Parent $AgentExe) 'sadapp-host-agent-tray.exe'
+    $trayCopy = Join-Path $testDirectory 'sadapp-host-agent-tray.exe'
+    Copy-Item -LiteralPath $traySource -Destination $trayCopy -Force
+    Invoke-Sign -Path $trayCopy
+    $script:SignedTrayExe = $trayCopy
 
     $msiPath = Join-Path $OutputDirectory "sadapp-host-agent-$Version-windows-x64.msi"
     Invoke-WixBuild -PackageVersion $Version -Destination $msiPath

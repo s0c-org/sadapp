@@ -12,6 +12,7 @@ Copy `sadapp-local-network-collector.env.example` and set:
 - `STATE_DIR`: credential, configuration, and spool location (default `/var/lib/sadapp-local-network-collector`).
 - `HEARTBEAT_INTERVAL_SECONDS`: initial bounded interval, 5-300 seconds (default 30). The backend controls subsequent intervals.
 - `MAX_CONCURRENT_TASKS`: local ceiling, 1-32 (default 4).
+- `MAX_DISCOVERY_PROBES`: maximum concurrent host probes per discovery task, 1-64 (default 64). On a shared gaming PC, start with `MAX_CONCURRENT_TASKS=1` and `MAX_DISCOVERY_PROBES=4`. Lower limits can make large discovery sweeps take longer; they do not change heartbeat or scheduled monitoring intervals, spool limits, or target selection.
 - `SPOOL_MAX_ITEMS` and `SPOOL_MAX_BYTES`: bounds applied independently to result and telemetry queues.
 - `HEALTH_PORT`: optional loopback-only `/health` listener.
 
