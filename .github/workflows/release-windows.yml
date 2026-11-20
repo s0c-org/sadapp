@@ -1,0 +1,100 @@
+name: Build Windows canary package
+run-name: Windows canary ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Full private source commit represented by this public snapshot
+        required: true
+        type: string
+      version:
+        description: Host Agent version
+        required: true
+        type: string
+      request_id:
+        description: Unique release request ID
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-canary-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate mirrored source and version
+        shell: pwsh
+        env:
+          SOURCE: ${{ inputs.source }}
+          VERSION: ${{ inputs.version }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          if ($env:SOURCE -notmatch '^[0-9a-f]{40}$' -or $env:VERSION -notmatch '^\d+\.\d+\.\d+$' -or $env:REQUEST_ID -notmatch '^[a-f0-9]{32}$') {
+            throw 'Invalid source, version or request ID.'
+          }
+          $sourceCommit = "Sync open components ($($env:SOURCE.Substring(0, 12)))"
+          if ((git log -1 --format=%s) -ne $sourceCommit) {
+            throw "Public snapshot does not represent private source $env:SOURCE."
+          }
+          $manifest = (Select-String -Path host-agent/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($manifest -ne $env:VERSION) { throw 'Agent version does not match public source.' }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - name: Build Windows MSI
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          $wix = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
+          & $wix extension add -g WixToolset.Util.wixext/5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX extension installation failed.' }
+          $env:PATH = "$(Split-Path $wix);$env:PATH"
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path host-agent/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Windows agent build failed.' }
+          ./host-agent/scripts/windows/Build-Prototype.ps1 `
+            -AgentExe 'host-agent/target/x86_64-pc-windows-msvc/release/sadapp-host-agent.exe' `
+            -Version $env:VERSION -OutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release')
+      - name: Publish Windows canary draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          SOURCE: ${{ inputs.source }}
+        run: |
+          $tag = "host-agent-v$($env:VERSION)-windows-canary-$($env:REQUEST_ID)"
+          $directory = Join-Path $env:RUNNER_TEMP 'windows-release'
+          $assets = @(
+            (Join-Path $directory "sadapp-host-agent-$($env:VERSION)-windows-x64.msi"),
+            (Join-Path $directory 'sadapp-host-agent.exe'),
+            (Join-Path $directory 'prototype-signing.cer'),
+            (Join-Path $directory 'CHECKSUMS'),
+            (Join-Path $directory 'README.md'),
+            (Join-Path $directory 'Install-HostAgent.ps1')
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Missing $asset" }
+          }
+          gh release create $tag @assets --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" `
+            --draft --prerelease `
+            --title "Sadapp Host Agent $($env:VERSION) Windows canary" `
+            --notes "Self-signed alpha installer; Windows may show an untrusted publisher warning. Private source: $($env:SOURCE)."
+          if ($LASTEXITCODE -ne 0) { throw 'Creating the Windows release draft failed.' }
