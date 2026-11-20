@@ -9,6 +9,8 @@ $workflowPath = Join-Path $repoRoot '.github\workflows\host-agent-windows.yml'
 $wixPath = Join-Path $repoRoot 'host-agent\packaging\windows\host-agent.wxs'
 $readmePath = Join-Path $repoRoot 'host-agent\packaging\windows\README.md'
 $updateScriptPath = Join-Path $repoRoot 'host-agent\src\windows_update_inventory.ps1'
+$traySourcePath = Join-Path $repoRoot 'host-agent\src\bin\sadapp-host-agent-tray.rs'
+$trayImagePath = Join-Path $repoRoot 'host-agent\src\bin\sadapp-tray.rgba'
 
 function Assert-Static {
     param(
@@ -97,6 +99,9 @@ Assert-Static ($null -ne $inventoryControl -and $inventoryControl.GetAttribute('
 Assert-Static ($serviceControl.GetAttribute('Stop') -eq 'both') 'The MSI must stop the service on install and uninstall.'
 Assert-Static ($serviceControl.GetAttribute('Remove') -eq 'uninstall') 'The MSI must remove the service on uninstall.'
 Assert-Static ($installDirectory.GetAttribute('Name') -eq 'HostAgent') 'The fixed installation directory must end in Sadapp\HostAgent.'
+Assert-Static ((Get-Item -LiteralPath $trayImagePath).Length -eq 4096 -and
+    (Get-Content -LiteralPath $traySourcePath -Raw).Contains('include_bytes!("sadapp-tray.rgba")')) `
+    'The tray companion must embed the 32px Sadapp mark.'
 
 $buildScript = Get-Content -LiteralPath (Join-Path $scriptsDirectory 'Build-Prototype.ps1') -Raw
 $installerScript = Get-Content -LiteralPath (Join-Path $scriptsDirectory 'Install-HostAgent.ps1') -Raw

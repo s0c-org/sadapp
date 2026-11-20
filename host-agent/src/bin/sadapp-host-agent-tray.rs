@@ -42,6 +42,10 @@ mod tray {
     };
 
     const TRAY_MESSAGE: u32 = WM_APP + 1;
+    const ICON_WIDTH: usize = 32;
+    const ICON_HEIGHT: usize = 32;
+    const ICON_MASK_STRIDE: usize = ICON_WIDTH / 8;
+    const ICON_RGBA: &[u8; ICON_WIDTH * ICON_HEIGHT * 4] = include_bytes!("sadapp-tray.rgba");
     thread_local! {
         static STATE: RefCell<Option<(u8, String)>> = const { RefCell::new(None) };
         static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -73,6 +77,48 @@ mod tray {
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn status_icon(
+        rgb: [u8; 3],
+    ) -> (
+        [u8; ICON_MASK_STRIDE * ICON_HEIGHT],
+        [u8; ICON_WIDTH * ICON_HEIGHT * 4],
+    ) {
+        let mut mask = [0u8; ICON_MASK_STRIDE * ICON_HEIGHT];
+        let mut pixels = [0u8; ICON_WIDTH * ICON_HEIGHT * 4];
+        for y in 0..ICON_HEIGHT {
+            let bitmap_y = ICON_HEIGHT - 1 - y;
+            for x in 0..ICON_WIDTH {
+                let source = (y * ICON_WIDTH + x) * 4;
+                let destination = (bitmap_y * ICON_WIDTH + x) * 4;
+                let red = ICON_RGBA[source];
+                let green = ICON_RGBA[source + 1];
+                let blue = ICON_RGBA[source + 2];
+                let alpha = ICON_RGBA[source + 3];
+                pixels[destination..destination + 4].copy_from_slice(&[blue, green, red, alpha]);
+                if alpha == 0 {
+                    mask[bitmap_y * ICON_MASK_STRIDE + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+
+        for y in 21..ICON_HEIGHT {
+            for x in 21..ICON_WIDTH {
+                let dx = x as i32 - 26;
+                let dy = y as i32 - 26;
+                let distance_squared = dx * dx + dy * dy;
+                if distance_squared > 25 {
+                    continue;
+                }
+                let destination = ((ICON_HEIGHT - 1 - y) * ICON_WIDTH + x) * 4;
+                pixels[destination..destination + 4]
+                    .copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
+                let bitmap_y = ICON_HEIGHT - 1 - y;
+                mask[bitmap_y * ICON_MASK_STRIDE + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+        (mask, pixels)
     }
 
     fn copy_diagnostics(hwnd: HWND) -> io::Result<()> {
@@ -135,22 +181,12 @@ mod tray {
             }
             let rgb =
                 [[0x32, 0xb9, 0x59], [0xfa, 0xb7, 0x2d], [0xe3, 0x48, 0x50]][usize::from(next.0)];
-            let mut mask = [0xffu8; 32];
-            let mut pixels = [0u8; 16 * 16 * 4];
-            for y in 0..16 {
-                for x in 0..16 {
-                    if (2 * x as i32 - 15).pow(2) + (2 * y as i32 - 15).pow(2) <= 196 {
-                        mask[2 * y + x / 8] &= !(0x80 >> (x % 8));
-                        let offset = (16 * y + x) * 4;
-                        pixels[offset..offset + 4].copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
-                    }
-                }
-            }
+            let (mask, pixels) = status_icon(rgb);
             unsafe {
                 data.hIcon = CreateIcon(
                     GetModuleHandleW(ptr::null()),
-                    16,
-                    16,
+                    ICON_WIDTH as i32,
+                    ICON_HEIGHT as i32,
                     1,
                     32,
                     mask.as_ptr(),
