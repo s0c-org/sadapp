@@ -310,6 +310,18 @@ pub async fn execute(context: &TaskContext, task: TaskLease) -> TaskResult {
         TaskType::CollectSnmp => collect_snmp(context, &task).await,
         TaskType::CollectPrometheus => collect_prometheus(context, &task).await,
         TaskType::CollectRest => collect_rest(context, &task).await,
+        TaskType::CollectTr064 => match context.config.read().await.policy() {
+            Ok(policy) => crate::tr064::collect(&task, &policy)
+                .await
+                .map_err(|error| TaskError::invalid(error.to_string())),
+            Err(error) => Err(TaskError::internal(error)),
+        },
+        TaskType::CollectProtocol => match context.config.read().await.policy() {
+            Ok(policy) => crate::protocols::collect(&task, &policy)
+                .await
+                .map_err(|error| TaskError::invalid(error.to_string())),
+            Err(error) => Err(TaskError::internal(error)),
+        },
         TaskType::RotateCredential => Err(TaskError::unsupported(
             "UNSUPPORTED_TASK",
             "credential rotation is not implemented by the current protocol",
@@ -334,7 +346,7 @@ pub async fn execute(context: &TaskContext, task: TaskLease) -> TaskResult {
             }
         }
         Err(error) => {
-            let error_message = format_task_error(&diagnostic_label, &task.payload, error.message);
+            let error_message = format_task_error(diagnostic_label, &task.payload, error.message);
             tracing::warn!(task_id = %task_id, task_type = %task_type, elapsed_ms = started.elapsed().as_millis(), error_code = %error.code, error_message = %error_message, "collector task failed");
             TaskResult {
                 task_id: task.id,
@@ -356,6 +368,8 @@ fn task_diagnostic_label(task_type: &TaskType, payload: &Map<String, Value>) -> 
         TaskType::CollectSnmp => "SNMP",
         TaskType::CollectPrometheus => "PROMETHEUS",
         TaskType::CollectRest => "REST",
+        TaskType::CollectTr064 => "TR-064",
+        TaskType::CollectProtocol => "PRIVATE_PROTOCOL",
         TaskType::RunCheck => match payload
             .get("checkType")
             .and_then(Value::as_str)
@@ -396,7 +410,7 @@ fn format_task_error(label: &str, payload: &Map<String, Value>, message: String)
                 let port = payload.get("port").and_then(Value::as_u64);
                 port.map_or_else(|| address.to_string(), |port| format!("{address}:{port}"))
             }),
-        "HTTP" | "HTTPS" | "PROMETHEUS" | "REST" => payload
+        "HTTP" | "HTTPS" | "PROMETHEUS" | "REST" | "TR-064" => payload
             .get("url")
             .or_else(|| payload.get("target"))
             .and_then(Value::as_str)

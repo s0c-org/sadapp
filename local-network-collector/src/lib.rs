@@ -6,6 +6,8 @@ pub mod discovery_protocols;
 pub mod link_layer;
 pub mod model;
 pub mod network_policy;
+pub mod protocols;
 pub mod runtime_config;
 pub mod spool;
 pub mod tasks;
+pub mod tr064;

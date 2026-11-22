@@ -36,6 +36,13 @@ const CAPABILITIES: &[&str] = &[
     "prometheus",
     "node_exporter",
     "rest",
+    "tr064",
+    "redfish",
+    "modbus",
+    "mqtt",
+    "unifi",
+    "bacula",
+    "topology",
 ];
 
 #[derive(Clone, Default, serde::Serialize)]

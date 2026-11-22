@@ -97,6 +97,8 @@ pub enum TaskType {
     CollectSnmp,
     CollectPrometheus,
     CollectRest,
+    CollectTr064,
+    CollectProtocol,
     RunCheck,
     RefreshConfig,
     RotateCredential,

@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use futures::{stream, StreamExt};
 use hickory_proto::{
     op::{Message, MessageType, OpCode, Query},
     rr::{domain::Name, RData, RecordType},
@@ -11,6 +12,7 @@ use hickory_proto::{
 use if_addrs::{get_if_addrs, Interface};
 use ipnet::IpNet;
 use quick_xml::{events::Event, Reader, XmlVersion};
+use reqwest::{redirect::Policy, Client};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -23,6 +25,7 @@ use uuid::Uuid;
 const MAX_MULTICAST_INTERFACES: usize = 8;
 const MAX_MULTICAST_RESPONSES: usize = 16;
 const MAX_MULTICAST_PACKET_BYTES: usize = 8 * 1024;
+const MAX_UPNP_DESCRIPTION_BYTES: usize = 64 * 1024;
 const SSDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const SSDP_GROUP_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0x000c);
@@ -120,6 +123,7 @@ fn parse_ssdp_response(packet: &[u8]) -> Option<(Value, Option<Value>)> {
     let mut st = None;
     let mut server = None;
     let mut usn = None;
+    let mut location = None;
     for line in text.lines().skip(1) {
         let Some((name, value)) = line.split_once(':') else {
             continue;
@@ -128,6 +132,7 @@ fn parse_ssdp_response(packet: &[u8]) -> Option<(Value, Option<Value>)> {
             "st" => st = Some(safe_text(value.trim(), 200)),
             "server" => server = Some(safe_text(value.trim(), 160)),
             "usn" => usn = Some(safe_text(value.trim(), 256)),
+            "location" => location = Some(safe_text(value.trim(), 512)),
             _ => {}
         }
     }
@@ -138,54 +143,197 @@ fn parse_ssdp_response(packet: &[u8]) -> Option<(Value, Option<Value>)> {
             .then(|| json!({ "method": "ssdp", "observed": true, "keyHash": hash_identity(uuid) }))
     });
     Some((
-        json!({ "protocol": "ssdp", "transport": "udp", "port": 1900, "state": "responded", "st": st, "server": server }),
+        json!({ "protocol": "ssdp", "transport": "udp", "port": 1900, "state": "responded", "st": st, "server": server, "descriptionLocation": location }),
         identity,
     ))
 }
 
+fn parse_upnp_description(xml: &str) -> Option<(Value, Option<Value>)> {
+    if xml.len() > MAX_UPNP_DESCRIPTION_BYTES {
+        return None;
+    }
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut current = String::new();
+    let mut device_type = String::new();
+    let mut friendly_name = String::new();
+    let mut manufacturer = String::new();
+    let mut model_name = String::new();
+    let mut model_number = String::new();
+    let mut udn = String::new();
+    let mut services = Vec::new();
+    let mut service_type = String::new();
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(element) => current = local_xml_name(element.name().as_ref()).to_owned(),
+            Event::Text(text) => {
+                let value = text.xml_content(XmlVersion::Implicit1_0);
+                match current.as_str() {
+                    "deviceType" if device_type.is_empty() => device_type.push_str(&value),
+                    "friendlyName" if friendly_name.is_empty() => friendly_name.push_str(&value),
+                    "manufacturer" if manufacturer.is_empty() => manufacturer.push_str(&value),
+                    "modelName" if model_name.is_empty() => model_name.push_str(&value),
+                    "modelNumber" if model_number.is_empty() => model_number.push_str(&value),
+                    "UDN" if udn.is_empty() => udn.push_str(&value),
+                    "serviceType" if service_type.is_empty() => service_type.push_str(&value),
+                    _ => {}
+                }
+            }
+            Event::End(element) => {
+                if local_xml_name(element.name().as_ref()) == "service" && !service_type.is_empty()
+                {
+                    if services.len() >= 32 {
+                        return None;
+                    }
+                    services.push(safe_text(&service_type, 200));
+                    service_type.clear();
+                }
+                current.clear();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let upnp_udn = udn.trim().strip_prefix("uuid:");
+    let identity = upnp_udn.filter(|value| !value.is_empty()).map(|value| {
+        json!({
+            "method": "upnp-udn", "observed": true, "keyHash": hash_identity(value),
+            "deviceProfile": if device_type.contains("InternetGatewayDevice") || services.iter().any(|item| item.contains("WANIPConnection")) { "gateway" } else { "network_device" },
+        })
+    });
+    Some((
+        json!({
+            "protocol": "upnp-description", "state": "responded",
+            "deviceType": safe_text(&device_type, 200),
+            "friendlyName": safe_text(&friendly_name, 160),
+            "manufacturer": safe_text(&manufacturer, 160),
+            "modelName": safe_text(&model_name, 160),
+            "modelNumber": safe_text(&model_number, 80),
+            "services": services,
+        }),
+        identity,
+    ))
+}
+
+async fn enrich_ssdp_description(
+    address: IpAddr,
+    cidr: IpNet,
+    observation: &mut Value,
+    client: &Client,
+) -> Option<Value> {
+    if !cidr.contains(&address) {
+        return None;
+    }
+    let location = observation
+        .get("descriptionLocation")
+        .and_then(Value::as_str)?;
+    let url = url::Url::parse(location).ok()?;
+    if !matches!(url.scheme(), "http") || url.username() != "" || url.password().is_some() {
+        return None;
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return None;
+    }
+    let host: IpAddr = url.host_str()?.trim_matches(&['[', ']'][..]).parse().ok()?;
+    if host != address || !cidr.contains(&host) {
+        return None;
+    }
+    let response = client.get(url.clone()).send().await.ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_UPNP_DESCRIPTION_BYTES as u64)
+    {
+        return None;
+    }
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if bytes.len() + chunk.len() > MAX_UPNP_DESCRIPTION_BYTES {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() > MAX_UPNP_DESCRIPTION_BYTES {
+        return None;
+    }
+    let xml = std::str::from_utf8(&bytes).ok()?;
+    let (description, identity) = parse_upnp_description(xml)?;
+    let mut metadata = description;
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("descriptionLocation".into(), Value::String(url.to_string()));
+    }
+    observation["descriptionLocation"] = Value::String(url.to_string());
+    observation["description"] = metadata;
+    identity
+}
+
 async fn probe_ssdp(
     interface: Ipv4Addr,
+    cidr: IpNet,
     timeout_duration: Duration,
 ) -> Vec<(IpAddr, Value, Option<Value>)> {
     let Ok(socket) = multicast_socket(interface, SSDP_GROUP) else {
         return Vec::new();
     };
     let request = b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n";
-    send_and_collect(
+    let client = match Client::builder()
+        .redirect(Policy::none())
+        .timeout(timeout_duration.min(Duration::from_secs(2)))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let responses = send_and_collect(
         &socket,
         SocketAddr::V4(SocketAddrV4::new(SSDP_GROUP, 1900)),
         request,
         timeout_duration,
     )
-    .await
-    .into_iter()
-    .filter_map(|(address, packet)| {
-        parse_ssdp_response(&packet).map(|(observation, identity)| (address, observation, identity))
-    })
-    .collect()
+    .await;
+    stream::iter(responses)
+        .map(|(address, packet)| {
+            let client = client.clone();
+            async move {
+                let (mut observation, identity) = parse_ssdp_response(&packet)?;
+                let enriched_identity =
+                    enrich_ssdp_description(address, cidr, &mut observation, &client)
+                        .await
+                        .or(identity);
+                Some((address, observation, enriched_identity))
+            }
+        })
+        .buffer_unordered(4)
+        .filter_map(async move |response| response)
+        .collect()
+        .await
 }
 
 async fn probe_ssdp_v6(
     interface: Ipv6Addr,
     interface_index: u32,
+    _cidr: IpNet,
     timeout_duration: Duration,
 ) -> Vec<(IpAddr, Value, Option<Value>)> {
     let Ok(socket) = multicast_socket_v6(interface, interface_index, SSDP_GROUP_V6) else {
         return Vec::new();
     };
     let request = b"M-SEARCH * HTTP/1.1\r\nHOST: [FF02::C]:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n";
-    send_and_collect(
+    let responses = send_and_collect(
         &socket,
         scoped_multicast_destination(SSDP_GROUP_V6, 1900, interface_index),
         request,
         timeout_duration,
     )
-    .await
-    .into_iter()
-    .filter_map(|(address, packet)| {
-        parse_ssdp_response(&packet).map(|(observation, identity)| (address, observation, identity))
-    })
-    .collect()
+    .await;
+    responses
+        .into_iter()
+        .filter_map(|(address, packet)| {
+            parse_ssdp_response(&packet)
+                .map(|(observation, identity)| (address, observation, identity))
+        })
+        .collect()
 }
 
 fn local_xml_name(name: &str) -> &str {
@@ -290,6 +438,7 @@ fn parse_mdns_response(packet: &[u8]) -> Option<Vec<String>> {
     if packet.len() > MAX_MULTICAST_PACKET_BYTES {
         return None;
     }
+
     let message = Message::from_vec(packet).ok()?;
     let service_types = message
         .answers
@@ -311,6 +460,53 @@ fn parse_mdns_response(packet: &[u8]) -> Option<Vec<String>> {
     (!service_types.is_empty()).then_some(service_types)
 }
 
+fn mdns_metadata(packet: &[u8]) -> (Vec<Value>, Option<String>) {
+    let Ok(message) = Message::from_vec(packet) else {
+        return (Vec::new(), None);
+    };
+    let mut records = Vec::new();
+    let mut matter_instance = None;
+    for record in message
+        .answers
+        .iter()
+        .chain(message.additionals.iter())
+        .take(128)
+    {
+        let owner = safe_text(&record.name.to_utf8(), 253);
+        match &record.data {
+            RData::SRV(srv) => {
+                records.push(json!({
+                    "kind": "SRV", "name": owner, "target": safe_text(&srv.target.to_utf8(), 253),
+                    "port": srv.port, "priority": srv.priority, "weight": srv.weight,
+                }));
+                if owner.contains("_matter._tcp") {
+                    matter_instance = Some(owner);
+                }
+            }
+            RData::TXT(txt) => {
+                let fields = txt
+                    .txt_data
+                    .iter()
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                    .filter(|value| !value.is_empty() && value.len() <= 256)
+                    .take(32)
+                    .collect::<Vec<_>>();
+                records.push(json!({ "kind": "TXT", "name": owner, "fields": fields }));
+                if owner.contains("_matter._tcp") {
+                    matter_instance = Some(owner);
+                }
+            }
+            RData::A(address) => {
+                records.push(json!({ "kind": "A", "name": owner, "address": address.to_string() }))
+            }
+            RData::AAAA(address) => records
+                .push(json!({ "kind": "AAAA", "name": owner, "address": address.to_string() })),
+            _ => {}
+        }
+    }
+    (records, matter_instance)
+}
+
 async fn probe_mdns(
     interface: Ipv4Addr,
     timeout_duration: Duration,
@@ -328,11 +524,25 @@ async fn probe_mdns(
         timeout_duration,
     )
     .await;
-    responses.into_iter().filter_map(|(address, packet)| {
-        parse_mdns_response(&packet).map(|service_types| (address, json!({
-            "protocol": "mdns", "transport": "udp", "port": 5353, "state": "responded", "serviceTypes": service_types,
-        }), None))
-    }).collect()
+    responses
+        .into_iter()
+        .filter_map(|(address, packet)| {
+            parse_mdns_response(&packet).map(|service_types| {
+                let (metadata, matter) = mdns_metadata(&packet);
+                let identity = matter.map(|instance| json!({
+                "method": "mdns-matter", "observed": true, "keyHash": hash_identity(&instance),
+            }));
+                (
+                    address,
+                    json!({
+                        "protocol": "mdns", "transport": "udp", "port": 5353, "state": "responded",
+                        "serviceTypes": service_types, "records": metadata,
+                    }),
+                    identity,
+                )
+            })
+        })
+        .collect()
 }
 
 async fn probe_mdns_v6(
@@ -356,13 +566,16 @@ async fn probe_mdns_v6(
     .into_iter()
     .filter_map(|(address, packet)| {
         parse_mdns_response(&packet).map(|service_types| {
+            let (metadata, matter) = mdns_metadata(&packet);
             (
                 address,
                 json!({
                     "protocol": "mdns", "transport": "udp", "port": 5353,
-                    "state": "responded", "serviceTypes": service_types,
+                    "state": "responded", "serviceTypes": service_types, "records": metadata,
                 }),
-                None,
+                matter.map(|instance| json!({
+                    "method": "mdns-matter", "observed": true, "keyHash": hash_identity(&instance),
+                })),
             )
         })
     })
@@ -407,10 +620,7 @@ fn add_observation(
             services.push(json!({ "transport": "udp", "port": port, "service": service }));
         }
     }
-    let probe_name = match protocol.as_str() {
-        "onvif-wsd" => "onvif-wsd",
-        other => other,
-    };
+    let probe_name = protocol.as_str();
     if let Some(probes) = evidence.get_mut("probes").and_then(Value::as_array_mut) {
         if !probes.iter().any(|item| item.as_str() == Some(probe_name)) {
             probes.push(json!(probe_name));
@@ -478,7 +688,7 @@ pub async fn discover_multicast(cidr: IpNet, timeout_duration: Duration) -> Vec<
         match interface.ip() {
             IpAddr::V4(interface_ip) => {
                 let (ssdp, onvif, mdns) = tokio::join!(
-                    probe_ssdp(interface_ip, timeout_duration),
+                    probe_ssdp(interface_ip, cidr, timeout_duration),
                     probe_onvif(interface_ip, timeout_duration),
                     probe_mdns(interface_ip, timeout_duration),
                 );
@@ -495,7 +705,7 @@ pub async fn discover_multicast(cidr: IpNet, timeout_duration: Duration) -> Vec<
                     continue;
                 };
                 let (ssdp, mdns) = tokio::join!(
-                    probe_ssdp_v6(interface_ip, interface_index, timeout_duration),
+                    probe_ssdp_v6(interface_ip, interface_index, cidr, timeout_duration),
                     probe_mdns_v6(interface_ip, interface_index, timeout_duration),
                 );
                 add_responses(
@@ -519,15 +729,29 @@ mod tests {
     use hickory_proto::rr::{rdata::PTR, Record};
 
     #[test]
-    fn parses_ssdp_identity_without_retaining_location_urls() {
+    fn parses_ssdp_identity_with_bounded_location_for_safe_enrichment() {
         let packet = b"HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:device-123::urn:schemas-upnp-org:device:MediaRenderer:1\r\nSERVER: ExampleOS/1.0 UPnP/1.1\r\nLOCATION: http://10.0.0.5/root.xml\r\n\r\n";
         let (observation, identity) = parse_ssdp_response(packet).unwrap();
         assert_eq!(
             observation["st"],
             "urn:schemas-upnp-org:device:MediaRenderer:1"
         );
-        assert!(observation.get("location").is_none());
+        assert_eq!(
+            observation["descriptionLocation"],
+            "http://10.0.0.5/root.xml"
+        );
         assert_eq!(identity.unwrap()["method"], "ssdp");
+    }
+
+    #[test]
+    fn parses_upnp_description_and_hashes_udn() {
+        let (description, identity) = parse_upnp_description(r#"<root><device><deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType><friendlyName>FRITZ!Box</friendlyName><manufacturer>AVM</manufacturer><modelName>FRITZ!Box 7590</modelName><UDN>uuid:box-123</UDN><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType></service></serviceList></device></root>"#).unwrap();
+        assert_eq!(description["manufacturer"], "AVM");
+        assert_eq!(
+            description["deviceType"],
+            "urn:schemas-upnp-org:device:InternetGatewayDevice:1"
+        );
+        assert_eq!(identity.unwrap()["deviceProfile"], "gateway");
     }
 
     #[test]

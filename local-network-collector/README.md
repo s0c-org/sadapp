@@ -78,9 +78,25 @@ stable identity from a supported protocol adapter.
 Discovery also sends a bounded SNMPv3 `noAuthNoPriv` sysObjectID request and
 IPv4 SSDP, ONVIF WS-Discovery, and mDNS DNS-SD queries on interfaces inside the
 scanned CIDR. SNMPv3 auth reports are recorded as `authentication-required`;
-UDP silence remains inconclusive. ONVIF UUIDs and SSDP USNs are hashed for
-correlation. Advertised HTTP locations are never fetched. IPv6 multicast and
+UDP silence remains inconclusive. ONVIF UUIDs, SSDP USNs, and UPnP UDNs are
+hashed for correlation. For an SSDP response, the collector fetches the advertised
+UPnP device description only when its `LOCATION` is HTTP, uses the exact responding
+IP address, and that address remains inside the scanned CIDR. Redirects are
+disabled and descriptions are capped at 64 KiB. Manufacturer, model, friendly
+name, device type and bounded service types are retained; credentials and control
+URLs are not fetched from the description. IPv6 SSDP metadata enrichment and
 Wi-Fi client inventory through AP/controller APIs are not implemented yet.
+
+Collectors advertising the `tr064` capability can execute explicitly leased,
+read-only FRITZ!Box TR-064 actions. Supported actions are limited to:
+`DeviceInfo:GetInfo`, `WANCommonInterfaceConfig:GetCommonLinkProperties`,
+`WANIPConnection:GetExternalIPAddress`, and
+`LANEthernetInterfaceConfig:GetStatistics`. The target must be inside collector
+CIDR policy; the control endpoint must remain on the target at port 49000, and
+the collector never accepts an arbitrary SOAP action or control URL from task
+payloads. Credentials are supplied only as ephemeral owner-scoped vault values
+for the leased task. HTTP Digest with `qop=auth`/MD5 is supported, responses are
+bounded to 128 KiB, and only allowlisted response fields are returned.
 
 REST discovery does not guess API paths or send credentials. `COLLECT_SNMP`
 still uses approved profiles and vaulted credentials for metric polling; the
