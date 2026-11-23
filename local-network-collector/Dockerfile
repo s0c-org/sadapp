@@ -9,7 +9,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release
 
 FROM debian:trixie-slim AS runtime
-RUN apt-get update \
+ARG SECURITY_REFRESH
+RUN test -n "$SECURITY_REFRESH" \
+	&& apt-get update \
 	&& apt-get upgrade --yes \
 	&& apt-get install --no-install-recommends --yes ca-certificates curl iproute2 iputils-ping snmp \
 	&& rm -rf /var/lib/apt/lists/*
