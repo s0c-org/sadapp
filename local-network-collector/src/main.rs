@@ -42,6 +42,8 @@ const CAPABILITIES: &[&str] = &[
     "mqtt",
     "unifi",
     "bacula",
+    "restconf",
+    "netgear_soap",
     "topology",
 ];
 

@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use quick_xml::{events::Event, Reader, XmlVersion};
 use reqwest::redirect::Policy;
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -359,6 +360,185 @@ async fn collect_unifi_or_bacula(
     Ok(result)
 }
 
+async fn collect_restconf(task: &TaskLease, policy: &NetworkPolicy) -> Result<Map<String, Value>> {
+    let target = target(task, policy)?;
+    let port = bounded_u16(&task.payload, "port", 443)?;
+    let resource_path = text(&task.payload, "resourcePath")?;
+    if !resource_path.starts_with("/restconf/data/")
+        || resource_path.contains('?')
+        || resource_path.contains('#')
+        || resource_path.len() > 512
+    {
+        bail!("RESTCONF path must select one allowlisted data resource below /restconf/data/");
+    }
+
+    let username = text(&task.payload, "usernameSecretId").and_then(|key| secret(task, key))?;
+    let password = text(&task.payload, "passwordSecretId").and_then(|key| secret(task, key))?;
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .timeout(REQUEST_TIMEOUT)
+        .danger_accept_invalid_certs(
+            task.payload.get("allowSelfSigned").and_then(Value::as_bool) == Some(true),
+        )
+        .build()?;
+    let response = client
+        .get(format!(
+            "https://{}{}",
+            std::net::SocketAddr::new(target, port),
+            resource_path
+        ))
+        .basic_auth(username, Some(password))
+        .header(
+            "accept",
+            "application/yang-data+json, application/json;q=0.9",
+        )
+        .send()
+        .await
+        .context("RESTCONF request failed")?;
+    if !response.status().is_success() {
+        bail!("RESTCONF request returned {}", response.status());
+    }
+    let value = read_bounded(response).await?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("RESTCONF response must be a JSON object"))
+}
+
+fn local_xml_name(name: &str) -> String {
+    name.rsplit(':').next().unwrap_or("").to_owned()
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn parse_netgear_attach_devices(xml: &str) -> Result<Vec<Value>> {
+    if xml.len() > MAX_RESPONSE_BYTES {
+        bail!("Netgear SOAP response exceeded the response limit");
+    }
+    let marker = xml
+        .find("NewAttachDevice")
+        .ok_or_else(|| anyhow!("Netgear SOAP returned no attached-device inventory"))?;
+    let start = xml[marker..]
+        .find('>')
+        .map(|offset| marker + offset + 1)
+        .ok_or_else(|| anyhow!("Netgear SOAP attached-device element is malformed"))?;
+    let end = xml[start..]
+        .find("</")
+        .map(|offset| start + offset)
+        .ok_or_else(|| anyhow!("Netgear SOAP attached-device element is incomplete"))?;
+    let attached = decode_xml_entities(&xml[start..end]);
+    if !attached.contains('<') {
+        bail!("Netgear SOAP returned no attached-device inventory");
+    }
+    let mut list = Reader::from_str(&attached);
+    list.config_mut().trim_text(true);
+    let mut field = String::new();
+    let mut device = Map::new();
+    let mut devices = Vec::new();
+    loop {
+        match list
+            .read_event()
+            .context("invalid Netgear attached-device list")?
+        {
+            Event::Start(element) => field = local_xml_name(element.name().as_ref()),
+            Event::Text(text) => {
+                if [
+                    "IP",
+                    "IPAddress",
+                    "MAC",
+                    "MACAddress",
+                    "Name",
+                    "DeviceName",
+                    "Type",
+                    "DeviceType",
+                ]
+                .contains(&field.as_str())
+                {
+                    device.insert(
+                        field.clone(),
+                        Value::String(text.xml_content(XmlVersion::Implicit1_0).into_owned()),
+                    );
+                }
+            }
+            Event::End(element) => {
+                field.clear();
+                if ["Item", "Device"].contains(&local_xml_name(element.name().as_ref()).as_str())
+                    && !device.is_empty()
+                {
+                    devices.push(Value::Object(std::mem::take(&mut device)));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if devices.len() > 512 {
+            bail!("Netgear SOAP returned too many attached devices");
+        }
+    }
+    if devices.is_empty() {
+        bail!("Netgear SOAP attached-device inventory was empty");
+    }
+    Ok(devices)
+}
+
+async fn collect_netgear_soap(
+    task: &TaskLease,
+    policy: &NetworkPolicy,
+) -> Result<Map<String, Value>> {
+    let target = target(task, policy)?;
+    let port = bounded_u16(&task.payload, "port", 5000)?;
+    let username = text(&task.payload, "usernameSecretId").and_then(|key| secret(task, key))?;
+    let password = text(&task.payload, "passwordSecretId").and_then(|key| secret(task, key))?;
+    let service = "urn:NETGEAR-ROUTER:service:DeviceInfo:1";
+    let body = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:GetAttachDevice xmlns:u="{service}"/></s:Body></s:Envelope>"#
+    );
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .timeout(REQUEST_TIMEOUT)
+        .build()?;
+    let response = client
+        .post(format!(
+            "http://{}/soap/server_sa/",
+            std::net::SocketAddr::new(target, port)
+        ))
+        .basic_auth(username, Some(password))
+        .header("content-type", "text/xml; charset=utf-8")
+        .header("soapaction", format!("\"{service}#GetAttachDevice\""))
+        .body(body)
+        .send()
+        .await
+        .context("Netgear SOAP request failed")?;
+    if !response.status().is_success() {
+        bail!("Netgear SOAP request returned {}", response.status());
+    }
+    let mut bytes = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("Netgear SOAP response failed")?
+    {
+        if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            bail!("Netgear SOAP response exceeded the response limit");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(Map::from_iter([(
+        "devices".into(),
+        Value::Array(parse_netgear_attach_devices(&String::from_utf8_lossy(
+            &bytes,
+        ))?),
+    )]))
+}
+
 pub async fn collect(task: &TaskLease, policy: &NetworkPolicy) -> Result<Map<String, Value>> {
     let protocol = text(&task.payload, "protocol")?.to_ascii_uppercase();
     match protocol.as_str() {
@@ -367,6 +547,32 @@ pub async fn collect(task: &TaskLease, policy: &NetworkPolicy) -> Result<Map<Str
         "MQTT" => collect_mqtt(task, policy).await,
         "UNIFI" => collect_unifi_or_bacula(task, policy, true).await,
         "BACULA" => collect_unifi_or_bacula(task, policy, false).await,
+        "RESTCONF" => collect_restconf(task, policy).await,
+        "NETGEAR_SOAP" => collect_netgear_soap(task, policy).await,
         _ => bail!("protocol is not supported"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_netgear_attach_devices;
+
+    #[test]
+    fn parses_bounded_netgear_attached_device_soap_inventory() {
+        let xml = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><GetAttachDeviceResponse><NewAttachDevice>&lt;Devices&gt;&lt;Device&gt;&lt;IP&gt;10.0.0.44&lt;/IP&gt;&lt;MAC&gt;00:11:22:33:44:55&lt;/MAC&gt;&lt;Name&gt;NAS&lt;/Name&gt;&lt;Type&gt;computer&lt;/Type&gt;&lt;/Device&gt;&lt;/Devices&gt;</NewAttachDevice></GetAttachDeviceResponse></s:Body></s:Envelope>"#;
+        let devices = parse_netgear_attach_devices(xml).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["IP"], "10.0.0.44");
+        assert_eq!(devices[0]["MAC"], "00:11:22:33:44:55");
+        assert_eq!(devices[0]["Name"], "NAS");
+    }
+
+    #[test]
+    fn rejects_empty_netgear_attached_device_inventory() {
+        let error = parse_netgear_attach_devices(
+            "<Envelope><Body><NewAttachDevice>none</NewAttachDevice></Body></Envelope>",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("inventory"));
     }
 }
