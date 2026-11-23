@@ -494,6 +494,15 @@ async fn collect_netgear_soap(
 ) -> Result<Map<String, Value>> {
     let target = target(task, policy)?;
     let port = bounded_u16(&task.payload, "port", 5000)?;
+    let endpoint_url = text(&task.payload, "url").unwrap_or("");
+    let use_tls = endpoint_url
+        .parse::<reqwest::Url>()
+        .is_ok_and(|url| url.scheme() == "https");
+    let allow_self_signed = task
+        .payload
+        .get("allowSelfSigned")
+        .and_then(Value::as_bool)
+        == Some(true);
     let username = text(&task.payload, "usernameSecretId").and_then(|key| secret(task, key))?;
     let password = text(&task.payload, "passwordSecretId").and_then(|key| secret(task, key))?;
     let service = "urn:NETGEAR-ROUTER:service:DeviceInfo:1";
@@ -502,11 +511,13 @@ async fn collect_netgear_soap(
     );
     let client = reqwest::Client::builder()
         .redirect(Policy::none())
+        .danger_accept_invalid_certs(use_tls && allow_self_signed)
         .timeout(REQUEST_TIMEOUT)
         .build()?;
+    let scheme = if use_tls { "https" } else { "http" };
     let response = client
         .post(format!(
-            "http://{}/soap/server_sa/",
+            "{scheme}://{}/soap/server_sa/",
             std::net::SocketAddr::new(target, port)
         ))
         .basic_auth(username, Some(password))
